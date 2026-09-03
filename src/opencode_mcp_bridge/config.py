@@ -42,6 +42,8 @@ class Settings:
     mcp_host: str
     mcp_port: int
     default_directory: str
+    default_provider_id: str
+    default_model_id: str
     exec_timeout_s: int
     exec_max_output_chars: int
 
@@ -91,6 +93,8 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         mcp_host=os.environ.get("MCP_HOST", "127.0.0.1"),
         mcp_port=mcp_port,
         default_directory=os.environ.get("DEFAULT_DIRECTORY", os.path.expanduser("~")),
+        default_provider_id=os.environ.get("DEFAULT_PROVIDER_ID", "opencode"),
+        default_model_id=os.environ.get("DEFAULT_MODEL_ID", "muse-spark-1.3-contributor-free"),
         exec_timeout_s=exec_timeout,
         exec_max_output_chars=exec_max_chars,
     )

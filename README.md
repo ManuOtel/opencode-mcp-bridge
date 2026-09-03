@@ -11,7 +11,7 @@ ChatGPT (developer connectors), Claude Code, Codex, MCP Inspector, and more.
 | --- | --- |
 | `list_providers` | Providers + model IDs + connected status. Call first (model picker). |
 | `list_agents` | Available agents (plan, build, ...). |
-| `create_session` | New session, optional title/directory/agent/providerID/modelID. |
+| `create_session` | New session, optional title/directory. |
 | `send_message` | Prompt a session, wait for the reply. Optional model/agent override. |
 | `list_sessions` | Recent sessions. |
 | `get_session` | One session by ID. |
@@ -20,8 +20,20 @@ ChatGPT (developer connectors), Claude Code, Codex, MCP Inspector, and more.
 | `delete_session` | Delete a session and its data (clean up tests). |
 | `get_diff` | File diffs from a session. |
 | `exec_run` | Raw shell on the bridge host. No sandbox. Prefer sessions for code edits. |
+| `worker_run` | Start a background worker: create a session and prompt it async. Returns compact `taskID` (= session ID), state, model, directory, title. |
+| `worker_status` | Poll a worker: stable state (`running`/`idle`/`error`/`unknown`) plus latest assistant text only, with `output_chars`/`total_chars`/`truncated_chars`/`truncated`. |
+| `worker_catalog` | List worker models, free and connected only by default, with bridge defaults. |
 
-If `providerID`/`modelID` are omitted, opencode uses its default model.
+`send_message` accepts `message`; `prompt` remains available as a backward-compatible alias.
+Supply exactly one. If `providerID`/`modelID` are omitted, the bridge uses its configured
+default model. Select the agent, provider, and model on `send_message`, not `create_session`.
+
+Workers are for fan-out: `worker_run` takes the same model options and defaults to the
+configured free model. Poll with `worker_status` (bounded output, latest assistant text
+only) and pick models with `worker_catalog` (`free_only` and `connected_only` default
+to true, `limit` defaults to 20 and caps at 100). Always pass `worker_status` the
+directory returned by `worker_run` when it differs from the configured default:
+status and messages are directory-scoped.
 
 ## Quickstart (local)
 
@@ -51,6 +63,8 @@ Check it: `curl http://127.0.0.1:8087/health` should report opencode healthy.
 | `MCP_HOST` | `127.0.0.1` | Bridge listen address. Use a host IP reachable from your reverse proxy when proxying from Docker. |
 | `MCP_PORT` | `8087` | Bridge listen port. |
 | `DEFAULT_DIRECTORY` | `$HOME` | Working directory for opencode sessions when clients omit it. |
+| `DEFAULT_PROVIDER_ID` | `opencode` | Default provider for `send_message`. |
+| `DEFAULT_MODEL_ID` | `muse-spark-1.3-contributor-free` | Default model for `send_message`. |
 | `EXEC_TIMEOUT_S` | `120` | Cap for `exec_run` timeouts. |
 | `EXEC_MAX_OUTPUT_CHARS` | `20000` | Output truncation cap for `exec_run`. |
 
