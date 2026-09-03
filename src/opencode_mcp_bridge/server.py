@@ -1,9 +1,10 @@
 """FastMCP server bridging MCP clients to local opencode.
 
-Transport: Streamable HTTP at POST /mcp (stateless, works with ChatGPT,
-Claude Code, Codex, and other MCP-compatible harnesses).
-Auth: static Bearer token on every /mcp request; Basic auth to opencode.
-Health: GET /health is open (reverse-proxy healthchecks).
+Transport: Streamable HTTP at POST /mcp (full 16-tool catalog, stateless)
+and POST /worker-mcp (five worker_* tools only, stateless). Works with
+ChatGPT, Claude Code, Codex, and other MCP-compatible harnesses.
+Auth: static Bearer token on every /mcp and /worker-mcp request;
+Basic auth to opencode. Health: GET /health is open (reverse-proxy checks).
 
 Run:
     python -m opencode_mcp_bridge.server
@@ -13,17 +14,17 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-import os
-from contextlib import suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
 import uvicorn
 from fastmcp import FastMCP
+from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from opencode_mcp_bridge.config import Settings, load_settings, resolve_tool_profile
+from opencode_mcp_bridge.config import Settings, load_settings
 from opencode_mcp_bridge.opencode_client import OpencodeClient
 
 WORKER_INSTRUCTIONS = (
@@ -36,6 +37,11 @@ WORKER_INSTRUCTIONS = (
 
 mcp = FastMCP(
     "opencode-bridge",
+    instructions=WORKER_INSTRUCTIONS,
+)
+
+worker_mcp = FastMCP(
+    "opencode-bridge-worker",
     instructions=WORKER_INSTRUCTIONS,
 )
 
@@ -79,6 +85,7 @@ def get_client() -> OpencodeClient:
 
 
 @mcp.custom_route("/health", methods=["GET"])
+@worker_mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> Response:
     """Open health endpoint for reverse-proxy checks.
 
@@ -588,6 +595,14 @@ async def _collect_verification(directory: str) -> dict[str, Any]:
         "openWorldHint": True,
     }
 )
+@worker_mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    }
+)
 async def worker_run(
     message: str,
     directory: str | None = None,
@@ -648,6 +663,14 @@ async def worker_run(
 
 
 @mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
+@worker_mcp.tool(
     annotations={
         "readOnlyHint": True,
         "destructiveHint": False,
@@ -724,6 +747,14 @@ async def worker_status(
 
 
 @mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
+@worker_mcp.tool(
     annotations={
         "readOnlyHint": True,
         "destructiveHint": False,
@@ -893,6 +924,14 @@ async def exec_run(
         "openWorldHint": False,
     }
 )
+@worker_mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def worker_verify(
     taskID: str,
     directory: str | None = None,
@@ -929,6 +968,14 @@ async def worker_verify(
 
 
 @mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
+@worker_mcp.tool(
     annotations={
         "readOnlyHint": False,
         "destructiveHint": True,
@@ -1007,31 +1054,6 @@ async def worker_cleanup(
     }
 
 
-def apply_tool_profile(profile: str | None = None) -> str:
-    """Apply an MCP tool profile using the public FastMCP visibility API.
-
-    Args:
-        profile: "full" or "worker", or None to read
-            OPENCODE_MCP_TOOL_PROFILE (default "full").
-
-    Returns:
-        The resolved profile name.
-
-    Raises:
-        RuntimeError: If the profile value is invalid.
-    """
-    resolved = resolve_tool_profile(profile)
-    hidden = set(ALL_TOOL_NAMES - WORKER_TOOL_NAMES)
-    if resolved == "worker":
-        mcp.disable(names=hidden)
-    else:
-        mcp.enable(names=hidden)
-    return resolved
-
-
-ACTIVE_TOOL_PROFILE = apply_tool_profile(os.getenv("OPENCODE_MCP_TOOL_PROFILE"))
-
-
 def _truncate(text: str, cap: int) -> str:
     """Truncate text with a marker.
 
@@ -1048,7 +1070,10 @@ def _truncate(text: str, cap: int) -> str:
 
 
 class BearerAuthMiddleware:
-    """ASGI middleware requiring a static Bearer token, except /health."""
+    """ASGI middleware requiring a static Bearer token, except /health.
+
+    Covers both /mcp (full catalog) and /worker-mcp (worker-only catalog).
+    """
 
     def __init__(self, app: Any, token: str) -> None:
         """Create the middleware.
@@ -1082,14 +1107,50 @@ class BearerAuthMiddleware:
 
 
 def create_app() -> Any:
-    """Build the Starlette app: MCP at /mcp plus Bearer auth.
+    """Build the Starlette app: /mcp (full) + /worker-mcp (worker-only).
+
+    Both MCP endpoints share the same Bearer token; GET /health stays open.
+    Tool functions are registered once on two FastMCP servers, so there is
+    no duplicated business logic. Lifespan enters both FastMCP session
+    managers via the public Starlette lifespan protocol.
 
     Returns:
         ASGI app ready for uvicorn.
     """
     settings = get_settings()
-    app = mcp.http_app(path="/mcp", stateless_http=True)
-    return BearerAuthMiddleware(app, settings.mcp_bearer_token)
+    full_app = mcp.http_app(path="/mcp", stateless_http=True)
+    worker_app = worker_mcp.http_app(path="/worker-mcp", stateless_http=True)
+
+    seen: set[tuple[Any, Any]] = set()
+    merged_routes: list[Any] = []
+    for route in [*full_app.routes, *worker_app.routes]:
+        key = (getattr(route, "path", None), tuple(sorted(getattr(route, "methods", None) or [])))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_routes.append(route)
+
+    merged_middleware: list[Any] = list(full_app.user_middleware)
+    known = {m.cls for m in merged_middleware}
+    for item in worker_app.user_middleware:
+        if item.cls not in known:
+            merged_middleware.append(item)
+            known.add(item.cls)
+
+    @asynccontextmanager
+    async def combined_lifespan(app: Starlette):  # type: ignore[no-untyped-def]
+        """Enter both FastMCP lifespans so both session managers run."""
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(full_app.router.lifespan_context(full_app))
+            await stack.enter_async_context(worker_app.router.lifespan_context(worker_app))
+            yield
+
+    outer = Starlette(
+        routes=merged_routes,
+        middleware=merged_middleware,
+        lifespan=combined_lifespan,
+    )
+    return BearerAuthMiddleware(outer, settings.mcp_bearer_token)
 
 
 def main() -> None:

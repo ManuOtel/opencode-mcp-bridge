@@ -46,32 +46,6 @@ class Settings:
     default_model_id: str
     exec_timeout_s: int
     exec_max_output_chars: int
-    tool_profile: str
-
-
-TOOL_PROFILE_ENV_VAR = "OPENCODE_MCP_TOOL_PROFILE"
-VALID_TOOL_PROFILES = ("full", "worker")
-
-
-def resolve_tool_profile(raw: str | None = None) -> str:
-    """Validate the MCP tool profile name.
-
-    Args:
-        raw: Raw profile value, or None to read from the environment.
-
-    Returns:
-        "full" or "worker".
-
-    Raises:
-        RuntimeError: If the value is not a supported profile.
-    """
-    value = raw if raw is not None else os.environ.get(TOOL_PROFILE_ENV_VAR, "full")
-    normalized = (value or "").strip().lower()
-    if normalized not in VALID_TOOL_PROFILES:
-        raise RuntimeError(
-            f"Invalid {TOOL_PROFILE_ENV_VAR}: {value!r}. Expected one of: full, worker"
-        )
-    return normalized
 
 
 def _required(name: str) -> str:
@@ -123,5 +97,4 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         default_model_id=os.environ.get("DEFAULT_MODEL_ID", "muse-spark-1.3-contributor-free"),
         exec_timeout_s=exec_timeout,
         exec_max_output_chars=exec_max_chars,
-        tool_profile=resolve_tool_profile(),
     )

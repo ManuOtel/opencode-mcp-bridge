@@ -33,8 +33,16 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
 `list_sessions`, `get_session`, `list_messages`, `abort_session`,
 `delete_session`, `get_diff`, `exec_run` (raw shell, full profile only).
 
-## Profiles
+## Endpoints
 
-`OPENCODE_MCP_TOOL_PROFILE=full` (default) exposes every tool. `worker` exposes
-only the five `worker_*` tools so plugin hosts avoid context bloat. Invalid
-values fail fast with a clear error.
+Two Streamable HTTP endpoints share one Bearer token; `GET /health` stays open.
+
+- `/mcp`: full backward-compatible 16-tool catalog for existing clients
+  (`worker_*` plus `list_*`, `create_session`, `send_message`, `get_session`,
+  `list_messages`, `abort_session`, `delete_session`, `get_diff`, `exec_run`).
+- `/worker-mcp`: exactly the five `worker_*` tools (`worker_catalog`,
+  `worker_run`, `worker_status`, `worker_verify`, `worker_cleanup`) so plugin
+  hosts avoid context bloat. The Codex plugin (`.mcp.json`) points here.
+
+There is no global tool-profile switch: both endpoints are always served from
+the same process, so legacy clients never lose tools when workers go compact.

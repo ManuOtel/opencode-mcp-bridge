@@ -34,10 +34,13 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
 
 - Codex: install the `opencode-worker` plugin from this repo. The manifest is
   `.codex-plugin/plugin.json`; bundled MCP config is `.mcp.json` (server `opencode`,
-  `https://opencode-mcp.manuotel.com/mcp`). Set `OPENCODE_MCP_BEARER_TOKEN` in the
-  environment; the token itself is never stored in the repo.
-- Other clients: add an MCP server with the same URL and an
-  `Authorization: Bearer <token>` header.
+  `https://opencode-mcp.manuotel.com/worker-mcp`, worker-only tools). Set
+  `OPENCODE_MCP_BEARER_TOKEN` in the environment; the token itself is never
+  stored in the repo.
+- Other clients: add an MCP server with an `Authorization: Bearer <token>` header.
+  Existing clients keep the full catalog at `https://<your-domain>/mcp`;
+  worker-only clients use `https://<your-domain>/worker-mcp`. Both paths share
+  the same Bearer token.
   - Claude Code: `claude mcp add --transport http opencode-bridge https://<your-domain>/mcp --header "Authorization: Bearer <token>"`
   - ChatGPT: Developer Mode ON > Connectors > Create connector, URL mode with
     `https://<your-domain>/mcp` + Bearer token, then Scan Tools.
@@ -91,6 +94,16 @@ Session and utility tools:
 | `get_diff` | File diffs from a session. |
 | `exec_run` | Raw shell on the bridge host. No sandbox. Prefer sessions for code edits. |
 
+## Endpoints and coexistence
+
+- `/mcp` always serves the full backward-compatible 16-tool catalog, so
+  existing clients never lose `list_*`, session, diff, or `exec_run` tools.
+- `/worker-mcp` serves exactly the five worker tools (`worker_catalog`,
+  `worker_run`, `worker_status`, `worker_verify`, `worker_cleanup`) for the
+  Codex plugin and other context-sensitive hosts.
+- Both endpoints share the same Bearer token; `/health` stays open. There is
+  no global tool-profile switch.
+
 ## Legacy compatibility
 
 - `send_message` accepts `message`; `prompt` remains a backward-compatible alias.
@@ -118,7 +131,7 @@ Session and utility tools:
   where the bridge runs. Prefer session tools for code edits; reserve `exec_run` for
   system ops (docker, systemctl, logs).
 - `/health` is the only unauthenticated endpoint (reverse-proxy checks). Everything
-  under `/mcp` requires the Bearer token.
+  under `/mcp` and `/worker-mcp` requires the same Bearer token.
 - Approval profile: writes prompt (`worker_run`, `worker_cleanup`, `exec_run`,
   `send_message`), reads auto-approve (`worker_status`, `worker_catalog`,
   `worker_verify`, `list_*`, `get_*`). Tighten to prompt-everything on shared hosts.
@@ -138,7 +151,7 @@ uv run python -m opencode_mcp_bridge.server
 ```
 
 Check it: `curl http://127.0.0.1:8087/health` should report OpenCode healthy.
-`POST /mcp` without a Bearer token must return 401.
+`POST /mcp` and `POST /worker-mcp` without a Bearer token must return 401.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

@@ -13,7 +13,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from opencode_mcp_bridge import server
-from opencode_mcp_bridge.config import resolve_tool_profile
 
 
 class _FakeLifecycleClient:
@@ -288,27 +287,12 @@ def test_instructions_worker_first_and_bounded() -> None:
     assert "advanced compatibility" in text
 
 
-def test_tool_profiles_list_expected_names() -> None:
-    """Worker profile exposes only the five worker tools; full keeps exec."""
-    try:
-        assert server.apply_tool_profile("worker") == "worker"
-        worker_names = {t.name for t in asyncio.run(server.mcp.list_tools())}
-        assert worker_names == set(server.WORKER_TOOL_NAMES)
-        assert "exec_run" not in worker_names
-    finally:
-        server.apply_tool_profile("full")
-    assert server.apply_tool_profile("full") == "full"
+def test_dual_servers_list_expected_names() -> None:
+    """Full server keeps all 16 tools; worker server exposes five only."""
     full_names = {t.name for t in asyncio.run(server.mcp.list_tools())}
+    assert full_names == set(server.ALL_TOOL_NAMES)
     assert set(server.WORKER_TOOL_NAMES) <= full_names
     assert "exec_run" in full_names
-    assert full_names == set(server.ALL_TOOL_NAMES)
-
-
-def test_tool_profile_rejects_invalid() -> None:
-    """Invalid profile values fail clearly."""
-    with pytest.raises(RuntimeError, match="Invalid"):
-        server.apply_tool_profile("bogus")
-    with pytest.raises(RuntimeError, match="Invalid"):
-        resolve_tool_profile("bogus")
-    assert resolve_tool_profile("worker") == "worker"
-    assert resolve_tool_profile("FULL") == "full"
+    worker_names = {t.name for t in asyncio.run(server.worker_mcp.list_tools())}
+    assert worker_names == set(server.WORKER_TOOL_NAMES)
+    assert "exec_run" not in worker_names
