@@ -12,8 +12,10 @@ task, poll it, verify the diff, then clean up.
 ## Worker quickstart (start here)
 
 1. Pick a model: `worker_catalog` (defaults to free + connected only).
-2. Launch: `worker_run` with `message`, `directory`, `title`. Save `taskID` and `directory`.
+2. Launch: `worker_run` with `message`, `directory`, `title`, and optional `requestID`
+   for safe retries. Save `taskID` and `directory`.
 3. Poll: `worker_status` with the same `taskID` and `directory` until `idle`.
+   The saved directory is reused when `directory` is omitted.
 4. Verify: call `worker_verify`, then inspect the exact diff and run tests/lint
    with the host's own tools; confirm acceptance criteria.
 5. Clean up: `worker_cleanup` when done.
@@ -27,6 +29,10 @@ worker_verify(taskID="<taskID>", directory="/path/to/repo")
 
 Status and messages are directory-scoped: always pass the `directory` returned
 by `worker_run` when it differs from the server default, or status reads `unknown`.
+When omitted, `worker_status` and `worker_verify` recover the saved directory
+from the durable task registry (`TASK_STATE_PATH`). Tasks are idempotent by
+`requestID`: same ID plus same inputs returns the existing task with
+`deduplicated=true`; conflicting reuse fails before side effects.
 States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
 `skills/recover-opencode-task/SKILL.md`).
 
@@ -72,8 +78,8 @@ Primary worker tools:
 
 | Tool | What it does |
 | --- | --- |
-| `worker_run` | Start a background worker (create session + async prompt). Returns compact `taskID` (= session ID), state, model, directory, title. |
-| `worker_status` | Poll state (`running`/`idle`/`error`/`unknown`) plus latest assistant text only, with truncation counts. |
+| `worker_run` | Start a background worker (create session + async prompt). Returns compact `taskID` (= session ID), state, model, directory, title, `requestID`, `deduplicated`. Optional `requestID` makes retries idempotent. |
+| `worker_status` | Poll state (`running`/`idle`/`error`/`unknown`) plus latest assistant text only, with truncation counts and bounded `directory` (recovered when omitted). |
 | `worker_catalog` | List models, free + connected only by default, with bridge defaults. |
 | `worker_verify` | Re-check a finished worker (state + evidence), read-only. Part of the 0.2.0 worker API; lands via the companion branch if absent here. |
 | `worker_cleanup` | Abort (`action=abort`) or delete (`action=delete`) a worker session. Prompts before running. Part of the 0.2.0 worker API; lands via the companion branch if absent here (use `abort_session` / `delete_session` in full profile meanwhile). |
@@ -112,6 +118,7 @@ Session and utility tools:
   uses its configured default model. Select agent/provider/model on `send_message`
   (or `worker_run`), not `create_session`.
 - `worker_run` takes the same model options and defaults to the configured free model.
+  `requestID` is optional; omit it to keep legacy behavior.
   `worker_catalog` filters (`free_only`, `connected_only` default true, `limit` default
   20, cap 100).
 - `abort_session`, `delete_session`, and `get_diff` are full-profile legacy
@@ -166,6 +173,7 @@ Check it: `curl http://127.0.0.1:8087/health` should report OpenCode healthy.
 | `DEFAULT_MODEL_ID` | `muse-spark-1.3-contributor-free` | Default model. |
 | `EXEC_TIMEOUT_S` | `120` | Cap for `exec_run` timeouts. |
 | `EXEC_MAX_OUTPUT_CHARS` | `20000` | Output truncation cap for `exec_run`. |
+| `TASK_STATE_PATH` | `/var/lib/opencode-mcp-bridge/tasks.json` | JSON registry for durable tasks (atomic writes, bounded records, no prompts or secrets). |
 
 Put a reverse proxy with TLS in front. Traefik example: `deploy/traefik-opencode-mcp.yaml`.
 Host systemd keeps full terminal access for `exec_run` (see

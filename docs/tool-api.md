@@ -10,22 +10,29 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
   alone never counts as free; cost metadata is preserved in entries but does
   not infer billing entitlement. The configured default provider/model sorts
   first when it survives filters, then deterministic provider/model order.
-- `worker_run(message, directory?, title?, agent?, providerID?, modelID?)`: start
-  background work. Returns `taskID` (= sessionID), state, model, directory, title.
+- `worker_run(message, directory?, title?, agent?, providerID?, modelID?, requestID?)`: start
+  background work. Returns `taskID` (= sessionID), state, model, directory, title,
+  `requestID`, and `deduplicated`. Pass `requestID` for idempotent retries: same ID
+  with the same inputs returns the existing task without a second session;
+  conflicting reuse fails before side effects. Every task is recorded in
+  `TASK_STATE_PATH` JSON (bounded, atomic, no prompt or credentials); prompt
+  failure removes the record and deletes the session best-effort.
 - `worker_status(taskID, directory?, include_output=true, max_output_chars=12000)`:
   poll state (`running`/`idle`/`error`/`unknown`) plus `messageID` and bounded
-  latest output only. `/session/status` lists active sessions only, so an
+  latest output only, plus bounded `directory`. `/session/status` lists active sessions only, so an
   absent entry with a completed assistant message infers `idle`; absent with
-  no assistant stays `unknown`.
+  no assistant stays `unknown`. When `directory` is omitted, the saved task
+  record supplies it.
 - `worker_verify(taskID, directory?, max_output_chars=12000)`: status output plus a
   read-only git bundle (`status --short`, `diff --stat`, `diff --check`
   exit/output, changed files, `latest_commit` directory-HEAD evidence for
   information only). Uses fixed git args only, no shell. Missing or
-  non-git directories return `verification.ok=false` cleanly.
+  non-git directories return `verification.ok=false` cleanly. When `directory`
+  is omitted, the saved task record supplies it.
 - `worker_cleanup(taskID, directory?, action="delete")`: `abort` stops the worker;
   `delete` aborts best-effort then deletes and reports `aborted` accurately
   (false plus a generic `cleanup_warning` when the pre-delete abort fails).
-  Validated before side effects.
+  Validated before side effects. Successful `delete` removes the task record.
 
 ## Legacy tools (advanced compatibility)
 

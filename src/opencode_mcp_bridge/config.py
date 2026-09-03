@@ -46,6 +46,7 @@ class Settings:
     default_model_id: str
     exec_timeout_s: int
     exec_max_output_chars: int
+    task_state_path: str
 
 
 def _required(name: str) -> str:
@@ -97,4 +98,7 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         default_model_id=os.environ.get("DEFAULT_MODEL_ID", "muse-spark-1.3-contributor-free"),
         exec_timeout_s=exec_timeout,
         exec_max_output_chars=exec_max_chars,
+        task_state_path=os.environ.get(
+            "TASK_STATE_PATH", "/var/lib/opencode-mcp-bridge/tasks.json"
+        ),
     )
