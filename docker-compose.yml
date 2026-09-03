@@ -1,0 +1,29 @@
+# Standalone compose. In Coolify deploy from this repo instead and set the
+# same env vars in the Coolify UI; Traefik routing below is a hint.
+services:
+  bridge:
+    build: .
+    image: opencode-mcp-bridge:latest
+    container_name: opencode-mcp-bridge
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8087:8087"
+    env_file:
+      - .env
+    environment:
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8087"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8087/health', timeout=4)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.opencode-mcp-http.entrypoints=http"
+      - "traefik.http.routers.opencode-mcp-http.rule=Host(`opencode-mcp.manuotel.com`)"
+      - "traefik.http.routers.opencode-mcp-http.priority=40"
+      - "traefik.http.services.opencode-mcp.loadbalancer.server.port=8087"

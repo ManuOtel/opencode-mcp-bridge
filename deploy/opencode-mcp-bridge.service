@@ -1,0 +1,28 @@
+# Host-mode systemd unit. Gives exec_run full server access (bridge runs on host).
+# Install:
+#   sudo mkdir -p /opt/opencode-mcp-bridge /etc/opencode-mcp-bridge
+#   sudo git clone <repo> /opt/opencode-mcp-bridge
+#   cd /opt/opencode-mcp-bridge && sudo -u root /root/.local/bin/uv sync --frozen --no-dev
+#   sudo install -m 600 /path/to/env /etc/opencode-mcp-bridge/env
+#   sudo cp deploy/opencode-mcp-bridge.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now opencode-mcp-bridge
+[Unit]
+Description=OpenCode MCP Bridge (ChatGPT connector)
+After=network-online.target opencode-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/opencode-mcp-bridge
+EnvironmentFile=/etc/opencode-mcp-bridge/env
+Environment=PATH=/opt/opencode-mcp-bridge/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/opencode-mcp-bridge/.venv/bin/python -m opencode_mcp_bridge.server
+Restart=always
+RestartSec=5
+NoNewPrivileges=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
