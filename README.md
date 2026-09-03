@@ -43,6 +43,8 @@ sudo /root/.local/bin/uv sync --frozen --no-dev
 # write /etc/opencode-mcp-bridge/env (mode 600) from .env.example:
 # OPENCODE_BASE_URL=http://10.0.1.1:4096
 # OPENCODE_SERVER_USERNAME / OPENCODE_SERVER_PASSWORD from /etc/opencode-server/env
+# MCP_HOST=10.0.1.1 (reachable from the Traefik container, unlike 127.0.0.1)
+# MCP_PORT=8087
 # MCP_BEARER_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
 sudo cp deploy/opencode-mcp-bridge.service /etc/systemd/system/
 sudo cp deploy/traefik-opencode-mcp.yaml /data/coolify/proxy/dynamic/opencode-mcp.yaml
