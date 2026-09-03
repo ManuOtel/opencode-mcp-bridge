@@ -6,7 +6,9 @@ tools over Streamable HTTP, so any MCP-compatible harness can drive it:
 ChatGPT (developer connectors), Claude Code, Codex, MCP Inspector, and more.
 
 This repo ships a Codex plugin (`opencode-worker`, see `.codex-plugin/`) with a
-worker playbook (`skills/`) for async background workers. Worker-first: scope a
+worker playbook (`skills/`) for async background workers, plus a Claude Code
+plugin (`opencode-worker`, see `plugins/claude-code/`) with the
+`coordinate-opencode-worker` skill. Worker-first: scope a
 task, poll it, verify the diff, then clean up.
 
 ## Quick connect
@@ -62,8 +64,28 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
   Then install `opencode-worker` from that marketplace. Set
   `OPENCODE_MCP_BEARER_TOKEN` in the environment; the token itself is never
   stored in the repo. See [docs/client-setup.md](docs/client-setup.md) section 6.
-  This is the plugin with the opinionated worker skills, not the Claude Code
-  MCP transport helper below (there is no Claude plugin marketplace format here).
+  This is the Codex plugin with the opinionated worker skills
+  (`delegate-to-opencode`, `verify-opencode-work`, `recover-opencode-task`,
+  `opencode-git-workflow`).
+- Claude Code (Git marketplace, recommended): the nested `opencode-worker`
+  plugin is exposed via the repo-root Claude marketplace
+  `.claude-plugin/marketplace.json` (relative source `./plugins/claude-code`,
+  owner `ManuOtel`):
+
+  ```bash
+  export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+  claude plugin marketplace add ManuOtel/opencode-mcp-bridge
+  claude plugin install opencode-worker@opencode-mcp-bridge
+  ```
+
+  Inside an interactive Claude Code session the equivalents are the session
+  commands `/plugin marketplace add ManuOtel/opencode-mcp-bridge` and
+  `/plugin install opencode-worker@opencode-mcp-bridge` (not shell commands).
+  Reload if requested. The plugin bundles the MCP transport plus the
+  `coordinate-opencode-worker` skill. See
+  [docs/client-setup.md](docs/client-setup.md) section 7. There is no npm or
+  Brew package; both marketplaces install from this GitHub repo.
+- Claude Code (manual transport only, no skills): `claude mcp add --transport http opencode https://opencode-mcp.manuotel.com/worker-mcp --header "Authorization: Bearer <token>"`
 - Codex (manual transport only): `codex mcp add opencode --url https://opencode-mcp.manuotel.com/worker-mcp --bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN`.
   The manifest is
   `.codex-plugin/plugin.json`; bundled MCP config is `.mcp.json` (server `opencode`,

@@ -1,6 +1,7 @@
 # Client setup (Codex and Claude Code)
 
 One-command path: `./scripts/install-client.sh --help`. Manual copy/paste below.
+There is no npm or Brew package; both clients install from this GitHub repo.
 
 ## 1. Token setup (never print or store the token)
 
@@ -32,6 +33,15 @@ Use `--name <name>` via the helper to register under a different server name.
 
 ## 3. Claude Code
 
+Easiest path: install the `opencode-worker` plugin from this repo's Claude
+marketplace (section 7). It bundles the MCP transport
+(`plugins/claude-code/.mcp.json`, server `opencode`,
+`https://opencode-mcp.manuotel.com/worker-mcp`) plus the
+`coordinate-opencode-worker` skill. Set `OPENCODE_MCP_BEARER_TOKEN` in the
+environment as in section 1; the token is never stored in the repo.
+
+Native MCP fallback (transport only, no skills):
+
 ```bash
 claude mcp add --transport http opencode https://opencode-mcp.manuotel.com/worker-mcp --header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"
 ```
@@ -58,12 +68,16 @@ Use `--name <name>` via the helper to register under a different server name.
 ## 5. Opinionated behavior (automatic with the plugin)
 
 Codex plugin packaging (`opencode-worker`, `.codex-plugin/plugin.json`,
-bundled `.mcp.json`) is available separately from this repo. When the plugin
-is installed, its skills load automatically and enforce the opinionated
-workflow:
+bundled `.mcp.json`) and Claude plugin packaging (`opencode-worker`,
+`plugins/claude-code/.claude-plugin/plugin.json`, bundled
+`plugins/claude-code/.mcp.json`) are available separately from this repo.
+When the plugin is installed, its skills load automatically and enforce the
+opinionated workflow:
 
-- `delegate-to-opencode`, then `verify-opencode-work`.
-- On failure: `recover-opencode-task`.
+- Codex: `delegate-to-opencode`, then `verify-opencode-work`.
+- Claude Code: `coordinate-opencode-worker` (scope, launch, poll/recover,
+  verify, clean up, sequential Git integration).
+- Codex on failure: `recover-opencode-task`.
 - Code changes follow `opencode-git-workflow`.
 - `AGENTS.md` binds workers: ownership boundaries, separate worktrees,
   minimal in-scope edits, free-model default
@@ -92,7 +106,47 @@ Directory, or `codex plugin add opencode-worker --marketplace opencode-mcp-bridg
 it). Set `OPENCODE_MCP_BEARER_TOKEN` in the environment as in section 1; the
 token is never stored in the repo.
 
-This is different from the Claude Code helper in section 3
+This is different from the Claude Code native helper in section 3
 (`claude mcp add --transport http ...`): that command only registers the MCP
-transport and carries no plugin skills. There is no Claude plugin marketplace
-format in this repo; Claude users keep using the MCP helper.
+transport and carries no plugin skills. For the Claude skills, use the Claude
+plugin marketplace in section 7.
+
+## 7. Claude plugin install via Git marketplace
+
+This is separate from the Codex marketplace in section 6. The nested Claude
+plugin `opencode-worker` (manifest
+`plugins/claude-code/.claude-plugin/plugin.json`, bundled
+`plugins/claude-code/.mcp.json`, skills under
+`plugins/claude-code/skills/`) is exposed through the repo-root Claude
+marketplace `.claude-plugin/marketplace.json`, which lists the nested plugin
+via the relative source `./plugins/claude-code` (owner `ManuOtel`). The
+existing Codex marketplace `.agents/plugins/marketplace.json` is unchanged.
+
+```bash
+export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+```
+
+Then register the marketplace and install the plugin. From a terminal
+(outside any session):
+
+```bash
+claude plugin marketplace add ManuOtel/opencode-mcp-bridge
+claude plugin install opencode-worker@opencode-mcp-bridge
+```
+
+Or from inside an interactive Claude Code session (these are session
+commands, not shell commands):
+
+```text
+/plugin marketplace add ManuOtel/opencode-mcp-bridge
+/plugin install opencode-worker@opencode-mcp-bridge
+```
+
+Reload Claude Code if it asks for it. The plugin's MCP server reads the token from
+`OPENCODE_MCP_BEARER_TOKEN` at request time via `Bearer ${OPENCODE_MCP_BEARER_TOKEN}`.
+
+The bundled transport serves the compact worker endpoint
+(`https://opencode-mcp.manuotel.com/worker-mcp`, exactly the five
+`worker_*` tools) so a leaked token cannot become a direct shell. The plugin
+cannot guarantee the self-hosted bridge or OpenCode server is reachable;
+if the tools do not respond, check the server side.

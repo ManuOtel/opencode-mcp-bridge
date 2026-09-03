@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "opencode": {
+      "type": "http",
+      "url": "https://opencode-mcp.manuotel.com/worker-mcp",
+      "headers": {
+        "Authorization": "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
+      }
+    }
+  }
+}

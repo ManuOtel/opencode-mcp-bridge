@@ -76,13 +76,14 @@ def test_docs_carry_exact_marketplace_add_command() -> None:
     assert ".agents/plugins/marketplace.json" in text
 
 
-def test_docs_distinguish_claude_helper_without_inventing_format() -> None:
-    """Docs separate the Claude MCP helper and claim no Claude marketplace."""
+def test_docs_distinguish_codex_marketplace_from_claude_marketplace() -> None:
+    """Docs separate the Codex and Claude marketplaces and keep the MCP helper."""
     text = DOCS.read_text()
     flat = " ".join(text.split())
     assert "claude mcp add --transport http" in text
-    assert "no Claude plugin marketplace format in this repo" in flat
-    assert ".claude-plugin/marketplace.json" not in text
+    assert ".claude-plugin/marketplace.json" in text
+    assert ".agents/plugins/marketplace.json" in text
+    assert "no Claude plugin marketplace format in this repo" not in flat
     assert "source of truth" in text
 
 
