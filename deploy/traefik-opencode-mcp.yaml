@@ -1,6 +1,9 @@
 # Manual Traefik route for host-mode deploys (systemd on the host).
 # Copy to /data/coolify/proxy/dynamic/opencode-mcp.yaml (root-owned, like opencode-web.yaml).
 # Mirrors opencode-web.yaml: Cloudflare edge terminates TLS, origin is HTTP.
+# NOTE: use 10.0.1.1, not 127.0.0.1. Traefik runs in Docker, so 127.0.0.1
+# would be the Traefik container itself. 10.0.1.1 is the host on the coolify
+# network. Set MCP_HOST=10.0.1.1 in the bridge env to match.
 http:
   routers:
     opencode-mcp:
@@ -13,4 +16,4 @@ http:
     opencode-mcp:
       loadBalancer:
         servers:
-          - url: "http://127.0.0.1:8087"
+          - url: "http://10.0.1.1:8087"
