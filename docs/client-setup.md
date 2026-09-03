@@ -124,12 +124,25 @@ existing Codex marketplace `.agents/plugins/marketplace.json` is unchanged.
 
 ```bash
 export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
-/plugin marketplace add ManuOtel/opencode-mcp-bridge
 ```
 
-Then install the `opencode-worker` plugin from that marketplace
-(`/plugin install opencode-worker@opencode-mcp-bridge`) and reload Claude
-Code if it asks for it. The plugin's MCP server reads the token from
+Then register the marketplace and install the plugin. From a terminal
+(outside any session):
+
+```bash
+claude plugin marketplace add ManuOtel/opencode-mcp-bridge
+claude plugin install opencode-worker@opencode-mcp-bridge
+```
+
+Or from inside an interactive Claude Code session (these are session
+commands, not shell commands):
+
+```text
+/plugin marketplace add ManuOtel/opencode-mcp-bridge
+/plugin install opencode-worker@opencode-mcp-bridge
+```
+
+Reload Claude Code if it asks for it. The plugin's MCP server reads the token from
 `OPENCODE_MCP_BEARER_TOKEN` at request time via `Bearer ${OPENCODE_MCP_BEARER_TOKEN}`.
 
 The bundled transport serves the compact worker endpoint

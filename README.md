@@ -74,12 +74,14 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
 
   ```bash
   export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
-  /plugin marketplace add ManuOtel/opencode-mcp-bridge
+  claude plugin marketplace add ManuOtel/opencode-mcp-bridge
+  claude plugin install opencode-worker@opencode-mcp-bridge
   ```
 
-  Then install `opencode-worker` from that marketplace
-  (`/plugin install opencode-worker@opencode-mcp-bridge`) and reload if
-  requested. It bundles the MCP transport plus the
+  Inside an interactive Claude Code session the equivalents are the session
+  commands `/plugin marketplace add ManuOtel/opencode-mcp-bridge` and
+  `/plugin install opencode-worker@opencode-mcp-bridge` (not shell commands).
+  Reload if requested. The plugin bundles the MCP transport plus the
   `coordinate-opencode-worker` skill. See
   [docs/client-setup.md](docs/client-setup.md) section 7. There is no npm or
   Brew package; both marketplaces install from this GitHub repo.
