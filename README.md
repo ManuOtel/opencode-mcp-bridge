@@ -251,6 +251,9 @@ uv run ruff format --check src tests
 git diff --check
 ```
 
+CI (`.github/workflows/ci.yml`) runs the same checks on pull requests and
+pushes to master, plus JSON validation of the Codex and Claude plugin manifests.
+
 ## License
 
 PolyForm Noncommercial 1.0.0 - free for noncommercial use and modification,
