@@ -88,7 +88,7 @@ codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref master
 ```
 
 Then install the `opencode-worker` plugin from that marketplace (Plugins
-Directory, or `codex plugin install opencode-worker` where the CLI supports
+Directory, or `codex plugin add opencode-worker --marketplace opencode-mcp-bridge` where the CLI supports
 it). Set `OPENCODE_MCP_BEARER_TOKEN` in the environment as in section 1; the
 token is never stored in the repo.
 
