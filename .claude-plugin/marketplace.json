@@ -1,0 +1,25 @@
+{
+  "name": "opencode-mcp-bridge",
+  "description": "Claude Code marketplace for the opencode-worker plugin: async OpenCode background workers over MCP.",
+  "owner": {
+    "name": "ManuOtel",
+    "url": "https://github.com/ManuOtel"
+  },
+  "plugins": [
+    {
+      "name": "opencode-worker",
+      "description": "Drive a self-hosted OpenCode instance as async background workers over MCP.",
+      "version": "0.1.0",
+      "source": "./plugins/claude-code",
+      "author": {
+        "name": "ManuOtel",
+        "url": "https://github.com/ManuOtel"
+      },
+      "homepage": "https://github.com/ManuOtel/opencode-mcp-bridge",
+      "repository": "https://github.com/ManuOtel/opencode-mcp-bridge",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "keywords": ["opencode", "mcp", "workers", "claude-code", "async"],
+      "category": "Productivity"
+    }
+  ]
+}
