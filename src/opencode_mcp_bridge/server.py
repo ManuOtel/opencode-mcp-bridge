@@ -337,6 +337,8 @@ WORKER_VERIFY_DEFAULT_CHARS = 12000
 WORKER_VERIFY_GIT_MAX_CHARS = 8000
 WORKER_VERIFY_GIT_MAX_FILES = 50
 WORKER_VERIFY_GIT_TIMEOUT_S = 15
+WORKER_VERIFY_COMMIT_MAX_CHARS = 300
+WORKER_CLEANUP_WARNING_MAX_CHARS = 300
 
 WORKER_TOOL_NAMES = frozenset(
     {
@@ -464,12 +466,17 @@ async def _run_git(directory: str, args: list[str]) -> tuple[int | None, str]:
             process.kill()
             await process.communicate()
         return None, f"timed out after {WORKER_VERIFY_GIT_TIMEOUT_S}s"
-    output = (stdout.decode(errors="replace") + stderr.decode(errors="replace")).strip()
+    output = (stdout.decode(errors="replace") + stderr.decode(errors="replace")).rstrip("\n")
+    output = output.rstrip("\r")
     return process.returncode, _bound_text(output, WORKER_VERIFY_GIT_MAX_CHARS)
 
 
 def _parse_status_files(status_short: str) -> list[str]:
     """Extract file paths from git status --short output.
+
+    The two leading status columns are positional and must not be stripped:
+    " M file" (unstaged), "M  file" (staged), "?? file" (untracked), and
+    "R  old -> new" (rename, resolves to the new path).
 
     Args:
         status_short: Raw status --short text.
@@ -479,10 +486,12 @@ def _parse_status_files(status_short: str) -> list[str]:
     """
     files: set[str] = set()
     for line in status_short.splitlines():
-        entry = line.strip()
-        if len(entry) < 4:
+        if len(line) < 4:
             continue
-        path = entry[3:].strip().strip('"')[:300]
+        raw_path = line[3:]
+        if not raw_path.strip():
+            continue
+        path = raw_path.strip().strip('"')[:300]
         if " -> " in path:
             path = path.split(" -> ", 1)[1].strip()[:300]
         if path:
@@ -502,7 +511,9 @@ async def _collect_verification(directory: str) -> dict[str, Any]:
 
     Returns:
         Compact verification dict with ok flag, bounded git outputs,
-        changed files, and an error field when the directory is unusable.
+        changed files, latest commit evidence, and an error field when
+        the directory is unusable. latest_commit is informational only;
+        it describes the directory HEAD and is never attributed to the task.
     """
     target = _bound_text(directory, 500)
     path = Path(target)
@@ -515,6 +526,7 @@ async def _collect_verification(directory: str) -> dict[str, Any]:
             "diff_check": {"exit_code": None, "output": ""},
             "changed_files": [],
             "changed_count": 0,
+            "latest_commit": "",
             "error": "directory not found",
         }
     if not path.is_dir():
@@ -526,6 +538,7 @@ async def _collect_verification(directory: str) -> dict[str, Any]:
             "diff_check": {"exit_code": None, "output": ""},
             "changed_files": [],
             "changed_count": 0,
+            "latest_commit": "",
             "error": "not a directory",
         }
     status_code, status_out = await _run_git(target, ["status", "--short"])
@@ -538,11 +551,16 @@ async def _collect_verification(directory: str) -> dict[str, Any]:
             "diff_check": {"exit_code": None, "output": ""},
             "changed_files": [],
             "changed_count": 0,
+            "latest_commit": "",
             "error": "not a git repository or git failed",
         }
     _, stat_out = await _run_git(target, ["diff", "--stat"])
     check_code, check_out = await _run_git(target, ["diff", "--check"])
     _, names_out = await _run_git(target, ["diff", "--name-only"])
+    log_code, log_out = await _run_git(target, ["log", "-1", "--oneline"])
+    latest_commit = (
+        _bound_text(log_out.strip(), WORKER_VERIFY_COMMIT_MAX_CHARS) if log_code == 0 else ""
+    )
     changed: set[str] = set(_parse_status_files(status_out))
     for line in names_out.splitlines():
         name = line.strip().strip('"')[:300]
@@ -559,6 +577,7 @@ async def _collect_verification(directory: str) -> dict[str, Any]:
         "diff_check": {"exit_code": check_code, "output": check_out},
         "changed_files": changed_files,
         "changed_count": len(changed_files),
+        "latest_commit": latest_commit,
         "error": None,
     }
 
@@ -568,7 +587,7 @@ async def _collect_verification(directory: str) -> dict[str, Any]:
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
-        "openWorldHint": False,
+        "openWorldHint": True,
     }
 )
 async def worker_run(
@@ -877,8 +896,10 @@ async def worker_verify(
     Returns:
         Compact dict with taskID, sessionID, state, status, bounded output
         counts, directory, and a verification bundle (git status --short,
-        diff --stat, diff --check exit/output, changed files). Handles
-        missing directories and non-git paths cleanly.
+        diff --stat, diff --check exit/output, changed files, latest commit
+        evidence). latest_commit is the directory HEAD for information only
+        and is never attributed to the task. Handles missing directories
+        and non-git paths cleanly.
 
     Raises:
         ValueError: If taskID is empty.
@@ -917,7 +938,10 @@ async def worker_cleanup(
 
     Returns:
         Stable compact dict with taskID, sessionID, action, aborted,
-        deleted, and directory.
+        deleted, directory, and cleanup_warning. aborted is True only when
+        the pre-action abort actually succeeded; when the best-effort abort
+        before delete fails, aborted is False and cleanup_warning carries a
+        short generic note (no internal error details).
 
     Raises:
         ValueError: If taskID is empty or action is not abort/delete.
@@ -938,18 +962,33 @@ async def worker_cleanup(
             "aborted": True,
             "deleted": False,
             "directory": effective_dir,
+            "cleanup_warning": None,
         }
-    aborted = True
-    with suppress(Exception):
+    try:
         await client.abort_session(taskID, directory)
+    except Exception:  # noqa: BLE001 - best-effort abort; outcome reported via aborted flag
+        await client.delete_session(taskID, directory)
+        return {
+            "taskID": taskID,
+            "sessionID": taskID,
+            "action": "delete",
+            "aborted": False,
+            "deleted": True,
+            "directory": effective_dir,
+            "cleanup_warning": _bound_text(
+                "pre-delete abort failed; session deleted",
+                WORKER_CLEANUP_WARNING_MAX_CHARS,
+            ),
+        }
     await client.delete_session(taskID, directory)
     return {
         "taskID": taskID,
         "sessionID": taskID,
         "action": "delete",
-        "aborted": aborted,
+        "aborted": True,
         "deleted": True,
         "directory": effective_dir,
+        "cleanup_warning": None,
     }
 
 

@@ -11,10 +11,13 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
   poll state (`running`/`idle`/`error`/`unknown`) plus bounded latest output only.
 - `worker_verify(taskID, directory?, max_output_chars=12000)`: status output plus a
   read-only git bundle (`status --short`, `diff --stat`, `diff --check`
-  exit/output, changed files). Uses fixed git args only, no shell. Missing or
+  exit/output, changed files, `latest_commit` directory-HEAD evidence for
+  information only). Uses fixed git args only, no shell. Missing or
   non-git directories return `verification.ok=false` cleanly.
 - `worker_cleanup(taskID, directory?, action="delete")`: `abort` stops the worker;
-  `delete` aborts best-effort then deletes. Validated before side effects.
+  `delete` aborts best-effort then deletes and reports `aborted` accurately
+  (false plus a generic `cleanup_warning` when the pre-delete abort fails).
+  Validated before side effects.
 
 ## Legacy tools (advanced compatibility)
 

@@ -24,6 +24,7 @@ class _FakeLifecycleClient:
     def __init__(self) -> None:
         self.aborted: list[tuple[Any, Any]] = []
         self.deleted: list[tuple[Any, Any]] = []
+        self.abort_error: Exception | None = None
         self.status_map: dict[str, Any] = {}
         self.latest: dict[str, Any] = {
             "messageID": None,
@@ -42,6 +43,8 @@ class _FakeLifecycleClient:
 
     async def abort_session(self, session_id: str, directory: Any = None) -> bool:
         self.aborted.append((session_id, directory))
+        if self.abort_error is not None:
+            raise self.abort_error
         return True
 
     async def delete_session(self, session_id: str, directory: Any = None) -> bool:
@@ -139,11 +142,88 @@ def test_worker_cleanup_abort_and_delete(monkeypatch: pytest.MonkeyPatch) -> Non
         "aborted": True,
         "deleted": False,
         "directory": "/tmp/w",
+        "cleanup_warning": None,
     }
     assert delete["action"] == "delete"
+    assert delete["aborted"] is True
     assert delete["deleted"] is True
+    assert delete["cleanup_warning"] is None
     assert fake.aborted == [("ses_1", "/tmp/w"), ("ses_1", "/tmp/w")]
     assert fake.deleted == [("ses_1", "/tmp/w")]
+
+
+def test_worker_cleanup_delete_reports_failed_abort(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed pre-delete abort reports aborted=false with a bounded warning."""
+    from opencode_mcp_bridge.opencode_client import OpencodeError
+
+    fake = _patch(monkeypatch)
+    fake.abort_error = OpencodeError("POST", "/session/ses_1/abort", 500, "boom-internal")
+    result = asyncio.run(server.worker_cleanup("ses_1", "/tmp/w", action="delete"))
+    assert result["action"] == "delete"
+    assert result["aborted"] is False
+    assert result["deleted"] is True
+    assert isinstance(result["cleanup_warning"], str)
+    assert len(result["cleanup_warning"]) <= server.WORKER_CLEANUP_WARNING_MAX_CHARS
+    assert "boom-internal" not in (result["cleanup_warning"] or "")
+    assert fake.deleted == [("ses_1", "/tmp/w")]
+
+
+def test_run_git_preserves_leading_whitespace(tmp_path: Path) -> None:
+    """Porcelain's leading status column must survive _run_git."""
+    repo = _git_repo(tmp_path)
+    code, out = asyncio.run(server._run_git(str(repo), ["status", "--short"]))
+    assert code == 0
+    assert " M a.txt" in out.splitlines()
+    assert out.splitlines()[0].startswith(" M")
+
+
+def test_parse_status_files_exact_columns() -> None:
+    """Two status columns parse positionally, renames resolve to new path."""
+    raw = " M a.txt\nM  b.txt\n?? c.txt\nR  old.txt -> new.txt\n"
+    assert server._parse_status_files(raw) == ["a.txt", "b.txt", "c.txt", "new.txt"]
+    assert server._parse_status_files(" M loner.txt\n") == ["loner.txt"]
+    assert server._parse_status_files("") == []
+
+
+def test_worker_verify_latest_commit_clean_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A clean tree after a commit still carries latest-commit evidence."""
+    fake = _patch(monkeypatch)
+    fake.status_map = {"ses_1": {"type": "idle"}}
+    fake.latest = {"messageID": "m1", "text": "done", "total_chars": 4, "has_error": False}
+    repo = _git_repo(tmp_path, dirty=False)
+
+    result = asyncio.run(server.worker_verify("ses_1", str(repo)))
+    bundle = result["verification"]
+    assert bundle["ok"] is True
+    assert bundle["status_short"] == ""
+    assert bundle["changed_files"] == []
+    assert bundle["changed_count"] == 0
+    assert isinstance(bundle["latest_commit"], str)
+    assert bundle["latest_commit"] != ""
+    assert "init" in bundle["latest_commit"]
+    assert len(bundle["latest_commit"]) <= server.WORKER_VERIFY_COMMIT_MAX_CHARS
+
+
+def test_worker_verify_latest_commit_shape_when_unusable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Missing and non-git directories expose latest_commit as empty string."""
+    fake = _patch(monkeypatch)
+    fake.status_map = {}
+    fake.latest = {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
+
+    async def run() -> tuple[dict[str, Any], dict[str, Any]]:
+        missing = await server.worker_verify("ses_x", str(tmp_path / "nope"))
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        nongit = await server.worker_verify("ses_x", str(plain))
+        return missing, nongit
+
+    missing, nongit = asyncio.run(run())
+    assert missing["verification"]["latest_commit"] == ""
+    assert nongit["verification"]["latest_commit"] == ""
 
 
 def test_worker_cleanup_validates_before_side_effects(
@@ -170,7 +250,7 @@ EXPECTED_ANNOTATIONS: dict[str, dict[str, bool]] = {
     "abort_session": {"readOnly": False, "destructive": True, "idempotent": True, "open": False},
     "delete_session": {"readOnly": False, "destructive": True, "idempotent": False, "open": False},
     "get_diff": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
-    "worker_run": {"readOnly": False, "destructive": False, "idempotent": False, "open": False},
+    "worker_run": {"readOnly": False, "destructive": False, "idempotent": False, "open": True},
     "worker_status": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
     "worker_catalog": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
     "exec_run": {"readOnly": False, "destructive": True, "idempotent": False, "open": True},
