@@ -444,6 +444,72 @@ def test_worker_status_error_and_unknown(monkeypatch: pytest.MonkeyPatch) -> Non
     assert unknown_result["status"] is None
 
 
+def test_worker_status_completed_text_infers_idle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Absent status plus a completed assistant message infers idle."""
+    fake = _patch_client(monkeypatch)
+    fake.status_map = {}
+    fake.latest = {"messageID": "m1", "text": "done", "total_chars": 4, "has_error": False}
+    result = asyncio.run(server.worker_status("ses_1"))
+    assert result["state"] == "idle"
+    assert result["status"] is None
+    assert result["messageID"] == "m1"
+    assert result["output"] == "done"
+
+
+def test_worker_status_completed_empty_text_infers_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent status plus a messageID with empty text still infers idle."""
+    fake = _patch_client(monkeypatch)
+    fake.status_map = {}
+    fake.latest = {"messageID": "m2", "text": "", "total_chars": 0, "has_error": False}
+    result = asyncio.run(server.worker_status("ses_1"))
+    assert result["state"] == "idle"
+    assert result["status"] is None
+    assert result["messageID"] == "m2"
+    assert result["output"] == ""
+
+
+def test_worker_status_absent_assistant_stays_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent status with no assistant message stays unknown."""
+    fake = _patch_client(monkeypatch)
+    fake.status_map = {}
+    fake.latest = {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
+    result = asyncio.run(server.worker_status("ses_missing"))
+    assert result["state"] == "unknown"
+    assert result["status"] is None
+    assert result["messageID"] is None
+
+
+def test_worker_status_absent_with_assistant_error_is_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent status plus an assistant error stays error, never idle."""
+    fake = _patch_client(monkeypatch)
+    fake.status_map = {}
+    fake.latest = {"messageID": "m3", "text": "boom", "total_chars": 4, "has_error": True}
+    result = asyncio.run(server.worker_status("ses_1"))
+    assert result["state"] == "error"
+    assert result["status"] is None
+    assert result["messageID"] == "m3"
+
+
+def test_worker_status_busy_with_assistant_stays_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Busy status plus an assistant message stays running, never idle."""
+    fake = _patch_client(monkeypatch)
+    fake.status_map = {"ses_1": {"type": "busy"}}
+    fake.latest = {"messageID": "m4", "text": "working", "total_chars": 7, "has_error": False}
+    result = asyncio.run(server.worker_status("ses_1"))
+    assert result["state"] == "running"
+    assert result["status"] == "busy"
+    assert result["messageID"] == "m4"
+    assert result["output"] == "working"
+
+
 def test_worker_status_skips_output_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -458,6 +524,7 @@ def test_worker_status_skips_output_when_disabled(
     assert result["truncated_chars"] == 0
     assert result["truncated"] is False
     assert result["state"] == "idle"
+    assert result["messageID"] is None
     assert fake.latest_caps == []
 
 

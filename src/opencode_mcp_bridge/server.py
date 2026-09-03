@@ -676,9 +676,12 @@ async def worker_status(
 
     Returns:
         Compact dict with taskID, sessionID, state
-        (running/idle/error/unknown), raw status, latest output only,
-        output_chars, total_chars, truncated_chars, and a truncated flag.
-        Never dumps full history.
+        (running/idle/error/unknown), raw status, messageID, latest output
+        only, output_chars, total_chars, truncated_chars, and a truncated
+        flag. Never dumps full history. GET /session/status contains active
+        sessions only, so an absent raw status with a non-null assistant
+        messageID and no assistant error infers idle; absent status with no
+        assistant stays unknown.
     """
     client = get_client()
     cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
@@ -686,6 +689,7 @@ async def worker_status(
     raw = statuses.get(taskID) if isinstance(statuses, dict) else None
     status = raw.get("type") if isinstance(raw, dict) else raw
     state = _map_worker_state(raw)
+    message_id: str | None = None
     output: str | None = None
     output_chars = 0
     total_chars = 0
@@ -693,8 +697,11 @@ async def worker_status(
     truncated = False
     if include_output:
         latest = await client.get_latest_assistant(taskID, directory, max_chars=cap + 1)
+        message_id = latest.get("messageID")
         if latest.get("has_error"):
             state = "error"
+        elif raw is None and message_id is not None:
+            state = "idle"
         total_chars = int(latest.get("total_chars", 0) or 0)
         text = latest.get("text", "") or ""
         if total_chars > cap:
@@ -709,6 +716,7 @@ async def worker_status(
         "sessionID": taskID,
         "state": state,
         "status": status,
+        "messageID": message_id,
         "output": output,
         "output_chars": output_chars,
         "total_chars": total_chars,

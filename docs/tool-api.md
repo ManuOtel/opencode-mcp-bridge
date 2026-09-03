@@ -8,7 +8,10 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
 - `worker_run(message, directory?, title?, agent?, providerID?, modelID?)`: start
   background work. Returns `taskID` (= sessionID), state, model, directory, title.
 - `worker_status(taskID, directory?, include_output=true, max_output_chars=12000)`:
-  poll state (`running`/`idle`/`error`/`unknown`) plus bounded latest output only.
+  poll state (`running`/`idle`/`error`/`unknown`) plus `messageID` and bounded
+  latest output only. `/session/status` lists active sessions only, so an
+  absent entry with a completed assistant message infers `idle`; absent with
+  no assistant stays `unknown`.
 - `worker_verify(taskID, directory?, max_output_chars=12000)`: status output plus a
   read-only git bundle (`status --short`, `diff --stat`, `diff --check`
   exit/output, changed files, `latest_commit` directory-HEAD evidence for
