@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -44,9 +45,10 @@ def test_load_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENCODE_SERVER_PASSWORD", "pw")
     monkeypatch.setenv("MCP_BEARER_TOKEN", "tok")
     settings = config.load_settings()
-    assert settings.opencode_base_url == "http://10.0.1.1:4096"
+    assert settings.opencode_base_url == "http://127.0.0.1:4096"
+    assert settings.mcp_host == "127.0.0.1"
     assert settings.mcp_port == 8087
-    assert settings.default_directory == "/home/manuotel"
+    assert settings.default_directory == os.path.expanduser("~")
 
 
 def test_load_settings_rejects_bad_numbers(monkeypatch: pytest.MonkeyPatch) -> None:

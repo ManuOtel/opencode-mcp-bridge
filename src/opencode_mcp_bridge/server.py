@@ -1,8 +1,9 @@
-"""FastMCP server bridging ChatGPT to local opencode.
+"""FastMCP server bridging MCP clients to local opencode.
 
-Transport: Streamable HTTP at POST /mcp (stateless, ChatGPT-compatible).
+Transport: Streamable HTTP at POST /mcp (stateless, works with ChatGPT,
+Claude Code, Codex, and other MCP-compatible harnesses).
 Auth: static Bearer token on every /mcp request; Basic auth to opencode.
-Health: GET /health is open (Traefik/Coolify healthchecks).
+Health: GET /health is open (reverse-proxy healthchecks).
 
 Run:
     python -m opencode_mcp_bridge.server
@@ -72,7 +73,7 @@ def get_client() -> OpencodeClient:
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> Response:
-    """Open health endpoint for Traefik/Coolify checks.
+    """Open health endpoint for reverse-proxy checks.
 
     Args:
         request: Starlette request (unused).

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test: health open, /mcp requires Bearer, tool list works with token.
-# Usage: MCP_BEARER_TOKEN=... BASE=https://opencode-mcp.manuotel.com ./scripts/smoke.sh
+# Usage: MCP_BEARER_TOKEN=... BASE=https://mcp.example.com ./scripts/smoke.sh
 set -euo pipefail
 BASE="${BASE:-http://127.0.0.1:8087}"
 TOKEN="${MCP_BEARER_TOKEN:-}"

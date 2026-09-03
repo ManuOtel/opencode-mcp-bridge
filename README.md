@@ -1,10 +1,9 @@
 # opencode-mcp-bridge
 
-MCP bridge exposing a local `opencode serve`/`opencode web` instance to ChatGPT
-via Streamable HTTP (`POST https://opencode-mcp.manuotel.com/mcp`).
-
-Full-access build: ChatGPT can work in any directory and run terminal commands.
-Protected by a static Bearer token on the MCP side and Basic auth to opencode.
+MCP bridge for a self-hosted [`opencode`](https://opencode.ai) instance.
+It exposes opencode sessions, models, diffs, and server shell access as MCP
+tools over Streamable HTTP, so any MCP-compatible harness can drive it:
+ChatGPT (developer connectors), Claude Code, Codex, MCP Inspector, and more.
 
 ## Tools
 
@@ -20,55 +19,75 @@ Protected by a static Bearer token on the MCP side and Basic auth to opencode.
 | `abort_session` | Abort a running session. |
 | `delete_session` | Delete a session and its data (clean up tests). |
 | `get_diff` | File diffs from a session. |
-| `exec_run` | Raw shell on the server. No sandbox. Prefer sessions for code edits. |
+| `exec_run` | Raw shell on the bridge host. No sandbox. Prefer sessions for code edits. |
 
 If `providerID`/`modelID` are omitted, opencode uses its default model.
 
-## Security warning
+## Quickstart (local)
 
-`exec_run` plus open directories means anyone with the Bearer token has full
-shell on the box. Treat `MCP_BEARER_TOKEN` like a root password: long random
-value, rotate on leak, never commit `.env`.
-
-## Deploy option A: host systemd (recommended, full terminal access)
-
-Bridge runs on the host like `opencode-web.service`, so `exec_run` is real
-host shell and `http://10.0.1.1:4096` is directly reachable.
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), plus a running
+`opencode serve` or `opencode web` (see [opencode server docs](https://opencode.ai/docs/server/)).
 
 ```bash
-sudo mkdir -p /opt/opencode-mcp-bridge /etc/opencode-mcp-bridge
-sudo git clone git@github-personal:ManuOtel/opencode-mcp-bridge.git /opt/opencode-mcp-bridge
-cd /opt/opencode-mcp-bridge
-sudo /root/.local/bin/uv sync --frozen --no-dev
-# write /etc/opencode-mcp-bridge/env (mode 600) from .env.example:
-# OPENCODE_BASE_URL=http://10.0.1.1:4096
-# OPENCODE_SERVER_USERNAME / OPENCODE_SERVER_PASSWORD from /etc/opencode-server/env
-# MCP_HOST=10.0.1.1 (reachable from the Traefik container, unlike 127.0.0.1)
-# MCP_PORT=8087
-# MCP_BEARER_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
-sudo cp deploy/opencode-mcp-bridge.service /etc/systemd/system/
-sudo cp deploy/traefik-opencode-mcp.yaml /data/coolify/proxy/dynamic/opencode-mcp.yaml
-sudo systemctl daemon-reload && sudo systemctl enable --now opencode-mcp-bridge
-curl -s http://127.0.0.1:8087/health
+git clone https://github.com/ManuOtel/opencode-mcp-bridge.git
+cd opencode-mcp-bridge
+uv sync
+cp .env.example .env
+# edit .env: opencode credentials + a fresh MCP_BEARER_TOKEN
+uv run python -m opencode_mcp_bridge.server
 ```
 
-Then add the Cloudflare Tunnel public hostname
-`opencode-mcp.manuotel.com` pointing at the Traefik HTTP origin (same origin
-as `opencode.manuotel.com`).
+Check it: `curl http://127.0.0.1:8087/health` should report opencode healthy.
+`POST /mcp` without a Bearer token must return 401.
 
-## Deploy option B: Coolify (container-scoped exec)
+## Configuration
 
-Deploy this repo as a Coolify app, set the env vars from `.env.example` in the
-Coolify UI, domain `opencode-mcp.manuotel.com`. Note: in Docker, `exec_run`
-runs inside the container, not on the host. Opencode tools work the same.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENCODE_BASE_URL` | `http://127.0.0.1:4096` | Opencode server URL. |
+| `OPENCODE_SERVER_USERNAME` | `opencode` | Basic auth user for opencode. |
+| `OPENCODE_SERVER_PASSWORD` | (required) | Basic auth password (`OPENCODE_SERVER_PASSWORD` of your opencode server). |
+| `MCP_BEARER_TOKEN` | (required) | Static token clients send as `Authorization: Bearer <token>`. Generate with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`. |
+| `MCP_HOST` | `127.0.0.1` | Bridge listen address. Use a host IP reachable from your reverse proxy when proxying from Docker. |
+| `MCP_PORT` | `8087` | Bridge listen port. |
+| `DEFAULT_DIRECTORY` | `$HOME` | Working directory for opencode sessions when clients omit it. |
+| `EXEC_TIMEOUT_S` | `120` | Cap for `exec_run` timeouts. |
+| `EXEC_MAX_OUTPUT_CHARS` | `20000` | Output truncation cap for `exec_run`. |
 
-## ChatGPT wiring
+## Exposing it publicly
 
-1. ChatGPT > Developer Mode ON > Connectors > Create connector.
-2. Tunnel off, URL mode, URL `https://opencode-mcp.manuotel.com/mcp`,
-   auth header `Authorization: Bearer <MCP_BEARER_TOKEN>`.
-3. Scan tools. Test read first: "list providers, then list sessions".
-4. Test write second: "create a session titled chatgpt-test and send hello".
+Put a reverse proxy with TLS in front (`/health` open, everything else
+requires the Bearer token - the bridge enforces that itself):
+
+- Traefik: see `deploy/traefik-opencode-mcp.yaml` (file-provider example).
+- Caddy: `reverse_proxy /mcp/* localhost:8087` plus `handle /health`.
+- Any HTTPS tunnel (Cloudflare Tunnel, Tailscale Serve, ngrok) also works.
+
+## Deploy options
+
+**A. Host systemd (full terminal access).** The bridge runs on the host like
+opencode itself, so `exec_run` is a real host shell. See
+`deploy/opencode-mcp-bridge.service`. Keep the env file root-only (`0600`).
+
+**B. Docker (container-scoped exec).** `docker compose up -d` after filling
+`.env` and setting your domain in `docker-compose.yml`. Opencode tools work
+the same, but `exec_run` runs inside the container, not on the host.
+
+## Connect a client
+
+- **Claude Code:** `claude mcp add --transport http opencode-bridge https://<your-domain>/mcp --header "Authorization: Bearer <token>"`
+- **ChatGPT:** Developer Mode ON > Connectors > Create connector, tunnel off, URL mode with `https://<your-domain>/mcp` + Bearer token, then Scan Tools.
+- **Codex / others:** add an MCP server with the same URL and Bearer header.
+- **Debug:** MCP Inspector or `./scripts/smoke.sh` (see script header).
+
+Suggested first tests: "list providers" (read), then "create a session and
+send it hello" (write), then "delete that session" (cleanup).
+
+## Security warning
+
+`exec_run` plus open directories means anyone with the Bearer token has a
+shell where the bridge runs. Treat `MCP_BEARER_TOKEN` like a root password:
+long random value, rotate on leak, never commit `.env`.
 
 ## Dev
 
@@ -79,3 +98,9 @@ uv run ruff check src tests
 uv run pytest
 MCP_BEARER_TOKEN=... BASE=http://127.0.0.1:8087 ./scripts/smoke.sh
 ```
+
+## License
+
+PolyForm Noncommercial 1.0.0 - free for noncommercial use and modification,
+commercial use needs permission. See [LICENSE.md](LICENSE.md). For a
+commercial license, reach out: manuotel@gmail.com
