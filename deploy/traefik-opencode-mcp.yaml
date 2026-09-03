@@ -1,0 +1,16 @@
+# Manual Traefik route for host-mode deploys (systemd on the host).
+# Copy to /data/coolify/proxy/dynamic/opencode-mcp.yaml (root-owned, like opencode-web.yaml).
+# Mirrors opencode-web.yaml: Cloudflare edge terminates TLS, origin is HTTP.
+http:
+  routers:
+    opencode-mcp:
+      entryPoints:
+        - http
+      service: opencode-mcp
+      rule: Host(`opencode-mcp.manuotel.com`)
+      priority: 40
+  services:
+    opencode-mcp:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8087"
