@@ -2,10 +2,11 @@ name: ci
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 jobs:
-  test:
+  validate:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -26,3 +27,14 @@ jobs:
         run: uv run ruff format --check src tests
       - name: Whitespace check
         run: git diff --check
+      - name: Validate plugin manifests
+        run: |
+          for f in \
+            .codex-plugin/plugin.json \
+            .mcp.json \
+            .agents/plugins/marketplace.json \
+            .claude-plugin/marketplace.json \
+            plugins/claude-code/.claude-plugin/plugin.json \
+            plugins/claude-code/.mcp.json; do
+            python3 -m json.tool "$f" > /dev/null
+          done
