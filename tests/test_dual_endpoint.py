@@ -63,8 +63,19 @@ def _tool_names(response) -> list[str]:
     for line in response.text.splitlines():
         if line.startswith("data: "):
             payload = json.loads(line[len("data: ") :])
-            return sorted(t["name"] for t in payload["result"]["tools"])
-    raise AssertionError(f"no SSE data payload in: {response.text[:500]}")
+            tools = payload.get("result", {}).get("tools", [])
+            if tools:
+                return sorted(t["name"] for t in tools)
+    # Fallback for JSON-response transport (no SSE framing).
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        tools = payload.get("result", {}).get("tools", [])
+        if tools:
+            return sorted(t["name"] for t in tools)
+    raise AssertionError(f"no tools payload in: {response.text[:500]}")
 
 
 def test_health_open_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,6 +84,8 @@ def test_health_open_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
         response = client.get("/health")
         assert response.status_code in (200, 503)
         assert response.status_code != 401
+        assert client.get("/health/").status_code != 401
+        assert client.post("/health").status_code == 401
 
 
 def test_auth_required_on_both_mcp_paths(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,6 +94,11 @@ def test_auth_required_on_both_mcp_paths(monkeypatch: pytest.MonkeyPatch) -> Non
         for path in ("/mcp", "/worker-mcp"):
             assert _rpc(client, path, "initialize").status_code == 401
             assert _rpc(client, path, "initialize", "wrong").status_code == 401
+            assert _rpc(client, path, "tools/list").status_code == 401
+            assert _rpc(client, path, "tools/list", "wrong").status_code == 401
+            assert client.get(path).status_code == 401
+            assert client.get(path, headers={"Authorization": f"Bearer {TOKEN}"}).status_code != 401
+            assert client.delete(path).status_code == 401
             authed = _rpc(client, path, "initialize", TOKEN)
             assert authed.status_code == 200, authed.text[:500]
 
@@ -103,3 +121,24 @@ def test_mcp_legacy_names_remain(monkeypatch: pytest.MonkeyPatch) -> None:
         assert LEGACY_NAMES <= full
         worker = set(_tool_names(_rpc(client, "/worker-mcp", "tools/list", TOKEN)))
         assert LEGACY_NAMES.isdisjoint(worker)
+
+
+def test_shared_tool_annotations_match() -> None:
+    """All five worker tools carry equal annotations on both servers."""
+    import asyncio
+
+    def _key(tool) -> tuple:
+        ann = tool.annotations
+        return (
+            getattr(ann, "read_only_hint", None),
+            getattr(ann, "destructive_hint", None),
+            getattr(ann, "idempotent_hint", None),
+            getattr(ann, "open_world_hint", None),
+        )
+
+    full = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
+    worker = {t.name: t for t in asyncio.run(server.worker_mcp.list_tools())}
+    assert set(worker) == set(server.WORKER_TOOL_NAMES)
+    for name in server.WORKER_TOOL_NAMES:
+        assert name in full
+        assert _key(full[name]) == _key(worker[name])

@@ -290,11 +290,11 @@ def test_truncate_marks() -> None:
     assert _truncate("abc", 4) == "abc"
 
 
-def _scope(path: str, token: str | None) -> dict:
+def _scope(path: str, token: str | None, method: str = "GET") -> dict:
     headers = []
     if token is not None:
         headers.append((b"authorization", f"Bearer {token}".encode()))
-    return {"type": "http", "path": path, "headers": headers}
+    return {"type": "http", "path": path, "method": method, "headers": headers}
 
 
 def test_bearer_middleware_allows_health_without_token() -> None:

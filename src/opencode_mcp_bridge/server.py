@@ -45,6 +45,11 @@ worker_mcp = FastMCP(
     instructions=WORKER_INSTRUCTIONS,
 )
 
+# Shared worker tools use stacked @mcp.tool + @worker_mcp.tool. Each
+# decorator snapshots ToolMeta via Tool.from_function at decorate time, so
+# each server keeps its own copy even though fn.__fastmcp__ ends as the
+# outer decorator's meta.
+
 _settings: Settings | None = None
 _client: OpencodeClient | None = None
 
@@ -1070,9 +1075,11 @@ def _truncate(text: str, cap: int) -> str:
 
 
 class BearerAuthMiddleware:
-    """ASGI middleware requiring a static Bearer token, except /health.
+    """ASGI middleware requiring a static Bearer token, except health.
 
     Covers both /mcp (full catalog) and /worker-mcp (worker-only catalog).
+    Only GET/HEAD on normalized /health (/health/) bypass auth; every
+    other method on health and every MCP route requires the token.
     """
 
     def __init__(self, app: Any, token: str) -> None:
@@ -1093,7 +1100,12 @@ class BearerAuthMiddleware:
             receive: ASGI receive channel.
             send: ASGI send channel.
         """
-        if scope.get("type") != "http" or scope.get("path") == "/health":
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        normalized = path.rstrip("/") or "/"
+        if normalized == "/health" and scope.get("method") in ("GET", "HEAD"):
             await self.app(scope, receive, send)
             return
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
@@ -1121,21 +1133,37 @@ def create_app() -> Any:
     full_app = mcp.http_app(path="/mcp", stateless_http=True)
     worker_app = worker_mcp.http_app(path="/worker-mcp", stateless_http=True)
 
-    seen: set[tuple[Any, Any]] = set()
+    # Merge routes without a generic (path, methods) dedupe: that would
+    # silently drop same-path routes with different endpoints. Only the
+    # intentionally shared /health route (same health_check fn) is deduped;
+    # all other routes are keyed by endpoint identity so collisions survive.
+    seen: set[tuple[Any, ...]] = set()
     merged_routes: list[Any] = []
     for route in [*full_app.routes, *worker_app.routes]:
-        key = (getattr(route, "path", None), tuple(sorted(getattr(route, "methods", None) or [])))
+        path = getattr(route, "path", None)
+        methods = tuple(sorted(getattr(route, "methods", None) or []))
+        endpoint = getattr(route, "endpoint", None)
+        if path in ("/health", "/health/"):
+            key = ("shared-health", methods)
+        else:
+            key = (path, methods, id(endpoint))
         if key in seen:
             continue
         seen.add(key)
         merged_routes.append(route)
 
+    # Dedupe middleware by full identity (class + args + kwargs); class-only
+    # dedupe would silently drop same-class middleware with different config.
+    def _middleware_key(item: Any) -> tuple[Any, ...]:
+        return (item.cls, repr(getattr(item, "args", ())), repr(getattr(item, "kwargs", {})))
+
     merged_middleware: list[Any] = list(full_app.user_middleware)
-    known = {m.cls for m in merged_middleware}
+    known = {_middleware_key(m) for m in merged_middleware}
     for item in worker_app.user_middleware:
-        if item.cls not in known:
+        key = _middleware_key(item)
+        if key not in known:
             merged_middleware.append(item)
-            known.add(item.cls)
+            known.add(key)
 
     @asynccontextmanager
     async def combined_lifespan(app: Starlette):  # type: ignore[no-untyped-def]
