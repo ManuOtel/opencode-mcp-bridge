@@ -1,0 +1,21 @@
+{
+  "name": "opencode-mcp-bridge",
+  "interface": {
+    "displayName": "OpenCode MCP Bridge"
+  },
+  "plugins": [
+    {
+      "name": "opencode-worker",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/ManuOtel/opencode-mcp-bridge.git",
+        "ref": "master"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

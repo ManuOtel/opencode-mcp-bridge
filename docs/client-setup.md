@@ -72,3 +72,27 @@ workflow:
 
 Manual MCP registration above connects the transport only. Install the plugin
 to get the delegation, verification, recovery, and Git workflow skills.
+
+## 6. Codex plugin install via Git marketplace
+
+The repository is the source of truth for the Codex plugin. The root plugin
+`opencode-worker` (manifest `.codex-plugin/plugin.json`, bundled `.mcp.json`)
+is exposed through the repo-scoped marketplace
+`.agents/plugins/marketplace.json`, which points at the repository root via a
+Git-backed source (`source=url`,
+`https://github.com/ManuOtel/opencode-mcp-bridge.git`, `ref=master`). No
+restructuring or plugin duplication was needed.
+
+```bash
+codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref master
+```
+
+Then install the `opencode-worker` plugin from that marketplace (Plugins
+Directory, or `codex plugin install opencode-worker` where the CLI supports
+it). Set `OPENCODE_MCP_BEARER_TOKEN` in the environment as in section 1; the
+token is never stored in the repo.
+
+This is different from the Claude Code helper in section 3
+(`claude mcp add --transport http ...`): that command only registers the MCP
+transport and carries no plugin skills. There is no Claude plugin marketplace
+format in this repo; Claude users keep using the MCP helper.

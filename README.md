@@ -51,11 +51,23 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
 
 ## Plugin install and config
 
-- Codex: install the `opencode-worker` plugin from this repo. The manifest is
-  `.codex-plugin/plugin.json`; bundled MCP config is `.mcp.json` (server `opencode`,
-  `https://opencode-mcp.manuotel.com/worker-mcp`, worker-only tools). Set
+- Codex (Git marketplace, recommended): the repository is the source of truth.
+  The root `opencode-worker` plugin is exposed via `.agents/plugins/marketplace.json`
+  (Git-backed root source, `ref` master):
+
+  ```bash
+  codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref master
+  ```
+
+  Then install `opencode-worker` from that marketplace. Set
   `OPENCODE_MCP_BEARER_TOKEN` in the environment; the token itself is never
-  stored in the repo.
+  stored in the repo. See [docs/client-setup.md](docs/client-setup.md) section 6.
+  This is the plugin with the opinionated worker skills, not the Claude Code
+  MCP transport helper below (there is no Claude plugin marketplace format here).
+- Codex (manual transport only): `codex mcp add opencode --url https://opencode-mcp.manuotel.com/worker-mcp --bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN`.
+  The manifest is
+  `.codex-plugin/plugin.json`; bundled MCP config is `.mcp.json` (server `opencode`,
+  `https://opencode-mcp.manuotel.com/worker-mcp`, worker-only tools).
 - Other clients: add an MCP server with an `Authorization: Bearer <token>` header.
   Existing clients keep the full catalog at `https://<your-domain>/mcp`;
   worker-only clients use `https://<your-domain>/worker-mcp`. Both paths share
