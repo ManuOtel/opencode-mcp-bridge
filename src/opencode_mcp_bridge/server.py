@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import os
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -21,18 +23,20 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from opencode_mcp_bridge.config import Settings, load_settings
+from opencode_mcp_bridge.config import Settings, load_settings, resolve_tool_profile
 from opencode_mcp_bridge.opencode_client import OpencodeClient
+
+WORKER_INSTRUCTIONS = (
+    "Worker-first bridge to self-hosted opencode. "
+    "Use worker_catalog to pick a model, worker_run to start background work, "
+    "worker_status to poll output, worker_verify to check git state, "
+    "worker_cleanup to abort/delete. Legacy session/message/diff/exec tools "
+    "are advanced compatibility only."
+)
 
 mcp = FastMCP(
     "opencode-bridge",
-    instructions=(
-        "Bridge to a self-hosted opencode instance. "
-        "Call list_providers first to see models, then create_session, "
-        "then send_message with the agent/providerID/modelID choices. "
-        "Sessions accept any directory (full server access). "
-        "exec_run runs raw shell commands on the server."
-    ),
+    instructions=WORKER_INSTRUCTIONS,
 )
 
 _settings: Settings | None = None
@@ -91,7 +95,14 @@ async def health_check(request: Request) -> Response:
         return JSONResponse({"ok": False, "error": str(exc)[:300]}, status_code=503)
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def list_providers() -> dict[str, Any]:
     """List opencode providers and models. Call this first for the model picker.
 
@@ -101,7 +112,14 @@ async def list_providers() -> dict[str, Any]:
     return await get_client().list_providers()
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def list_agents(directory: str | None = None) -> list[dict[str, Any]]:
     """List available opencode agents (e.g. plan, build).
 
@@ -114,7 +132,14 @@ async def list_agents(directory: str | None = None) -> list[dict[str, Any]]:
     return await get_client().list_agents(directory)
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
 async def create_session(
     title: str | None = None,
     directory: str | None = None,
@@ -132,7 +157,14 @@ async def create_session(
     return OpencodeClient._simplify_session(session)
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
 async def send_message(
     sessionID: str,
     message: str | None = None,
@@ -163,7 +195,14 @@ async def send_message(
     )
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def list_sessions(directory: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
     """List recent opencode sessions.
 
@@ -177,7 +216,14 @@ async def list_sessions(directory: str | None = None, limit: int = 30) -> list[d
     return await get_client().list_sessions(directory, max(1, min(limit, 100)))
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def get_session(sessionID: str, directory: str | None = None) -> dict[str, Any]:
     """Get one session by ID.
 
@@ -191,7 +237,14 @@ async def get_session(sessionID: str, directory: str | None = None) -> dict[str,
     return await get_client().get_session(sessionID, directory)
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def list_messages(
     sessionID: str, directory: str | None = None, limit: int = 50
 ) -> list[dict[str, Any]]:
@@ -208,7 +261,14 @@ async def list_messages(
     return await get_client().list_messages(sessionID, directory, max(1, min(limit, 200)))
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def abort_session(sessionID: str, directory: str | None = None) -> dict[str, Any]:
     """Abort a running session.
 
@@ -223,7 +283,14 @@ async def abort_session(sessionID: str, directory: str | None = None) -> dict[st
     return {"sessionID": sessionID, "aborted": True}
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
 async def delete_session(sessionID: str, directory: str | None = None) -> dict[str, Any]:
     """Delete a session and all its data. Use to clean up test sessions.
 
@@ -238,7 +305,14 @@ async def delete_session(sessionID: str, directory: str | None = None) -> dict[s
     return {"sessionID": sessionID, "deleted": True}
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def get_diff(
     sessionID: str, messageID: str | None = None, directory: str | None = None
 ) -> list[dict[str, Any]]:
@@ -259,6 +333,40 @@ WORKER_OUTPUT_DEFAULT_CHARS = 12000
 WORKER_OUTPUT_MAX_CHARS = 50000
 WORKER_CATALOG_DEFAULT_LIMIT = 20
 WORKER_CATALOG_MAX_LIMIT = 100
+WORKER_VERIFY_DEFAULT_CHARS = 12000
+WORKER_VERIFY_GIT_MAX_CHARS = 8000
+WORKER_VERIFY_GIT_MAX_FILES = 50
+WORKER_VERIFY_GIT_TIMEOUT_S = 15
+
+WORKER_TOOL_NAMES = frozenset(
+    {
+        "worker_run",
+        "worker_status",
+        "worker_verify",
+        "worker_cleanup",
+        "worker_catalog",
+    }
+)
+ALL_TOOL_NAMES = frozenset(
+    {
+        "list_providers",
+        "list_agents",
+        "create_session",
+        "send_message",
+        "list_sessions",
+        "get_session",
+        "list_messages",
+        "abort_session",
+        "delete_session",
+        "get_diff",
+        "worker_run",
+        "worker_status",
+        "worker_catalog",
+        "exec_run",
+        "worker_verify",
+        "worker_cleanup",
+    }
+)
 
 
 def _map_worker_state(status: Any) -> str:
@@ -311,7 +419,158 @@ def _is_free_model(model_id: Any, name: Any, cost: Any) -> bool:
     return False
 
 
-@mcp.tool
+def _bound_text(value: Any, cap: int) -> str:
+    """Bound an arbitrary value to a short string.
+
+    Args:
+        value: Value to stringify.
+        cap: Max chars.
+
+    Returns:
+        Bounded string.
+    """
+    text = value if isinstance(value, str) else str(value)
+    return text[:cap]
+
+
+async def _run_git(directory: str, args: list[str]) -> tuple[int | None, str]:
+    """Run one fixed git command without a shell.
+
+    Args:
+        directory: Repository directory passed as git -C target.
+        args: Fixed git subcommand arguments (never caller-provided commands).
+
+    Returns:
+        Tuple of exit code (None on spawn/timeout failure) and bounded output
+        combining stdout and stderr.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            "-C",
+            directory,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return None, "git executable not found"
+    except (NotADirectoryError, PermissionError, OSError) as exc:
+        return None, _bound_text(f"cannot run git: {exc}", WORKER_VERIFY_GIT_MAX_CHARS)
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), WORKER_VERIFY_GIT_TIMEOUT_S)
+    except TimeoutError:
+        with suppress(Exception):
+            process.kill()
+            await process.communicate()
+        return None, f"timed out after {WORKER_VERIFY_GIT_TIMEOUT_S}s"
+    output = (stdout.decode(errors="replace") + stderr.decode(errors="replace")).strip()
+    return process.returncode, _bound_text(output, WORKER_VERIFY_GIT_MAX_CHARS)
+
+
+def _parse_status_files(status_short: str) -> list[str]:
+    """Extract file paths from git status --short output.
+
+    Args:
+        status_short: Raw status --short text.
+
+    Returns:
+        Bounded sorted file list.
+    """
+    files: set[str] = set()
+    for line in status_short.splitlines():
+        entry = line.strip()
+        if len(entry) < 4:
+            continue
+        path = entry[3:].strip().strip('"')[:300]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()[:300]
+        if path:
+            files.add(path)
+        if len(files) >= WORKER_VERIFY_GIT_MAX_FILES:
+            break
+    return sorted(files)[:WORKER_VERIFY_GIT_MAX_FILES]
+
+
+async def _collect_verification(directory: str) -> dict[str, Any]:
+    """Collect a bounded read-only git verification bundle.
+
+    Runs only fixed git arguments via create_subprocess_exec, never a shell.
+
+    Args:
+        directory: Repository directory to inspect.
+
+    Returns:
+        Compact verification dict with ok flag, bounded git outputs,
+        changed files, and an error field when the directory is unusable.
+    """
+    target = _bound_text(directory, 500)
+    path = Path(target)
+    if not path.exists():
+        return {
+            "ok": False,
+            "directory": target,
+            "status_short": "",
+            "diff_stat": "",
+            "diff_check": {"exit_code": None, "output": ""},
+            "changed_files": [],
+            "changed_count": 0,
+            "error": "directory not found",
+        }
+    if not path.is_dir():
+        return {
+            "ok": False,
+            "directory": target,
+            "status_short": "",
+            "diff_stat": "",
+            "diff_check": {"exit_code": None, "output": ""},
+            "changed_files": [],
+            "changed_count": 0,
+            "error": "not a directory",
+        }
+    status_code, status_out = await _run_git(target, ["status", "--short"])
+    if status_code != 0:
+        return {
+            "ok": False,
+            "directory": target,
+            "status_short": status_out,
+            "diff_stat": "",
+            "diff_check": {"exit_code": None, "output": ""},
+            "changed_files": [],
+            "changed_count": 0,
+            "error": "not a git repository or git failed",
+        }
+    _, stat_out = await _run_git(target, ["diff", "--stat"])
+    check_code, check_out = await _run_git(target, ["diff", "--check"])
+    _, names_out = await _run_git(target, ["diff", "--name-only"])
+    changed: set[str] = set(_parse_status_files(status_out))
+    for line in names_out.splitlines():
+        name = line.strip().strip('"')[:300]
+        if name:
+            changed.add(name)
+        if len(changed) >= WORKER_VERIFY_GIT_MAX_FILES:
+            break
+    changed_files = sorted(changed)[:WORKER_VERIFY_GIT_MAX_FILES]
+    return {
+        "ok": True,
+        "directory": target,
+        "status_short": status_out,
+        "diff_stat": stat_out,
+        "diff_check": {"exit_code": check_code, "output": check_out},
+        "changed_files": changed_files,
+        "changed_count": len(changed_files),
+        "error": None,
+    }
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
 async def worker_run(
     message: str,
     directory: str | None = None,
@@ -371,7 +630,14 @@ async def worker_run(
     }
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def worker_status(
     taskID: str,
     directory: str | None = None,
@@ -432,7 +698,14 @@ async def worker_status(
     }
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
 async def worker_catalog(
     query: str | None = None,
     free_only: bool = True,
@@ -514,7 +787,14 @@ async def worker_catalog(
     }
 
 
-@mcp.tool
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    }
+)
 async def exec_run(
     command: str, workdir: str | None = None, timeout_s: int | None = None
 ) -> dict[str, Any]:
@@ -569,6 +849,133 @@ async def exec_run(
         }
     except NotADirectoryError:
         return {"exit_code": 127, "stdout": "", "stderr": f"not a directory: {cwd}", "workdir": cwd}
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+)
+async def worker_verify(
+    taskID: str,
+    directory: str | None = None,
+    max_output_chars: int = WORKER_VERIFY_DEFAULT_CHARS,
+) -> dict[str, Any]:
+    """Verify a worker: bounded latest output plus a read-only git bundle.
+
+    Never runs caller-provided commands. Git inspection uses only fixed
+    arguments via asyncio.create_subprocess_exec, never a shell.
+
+    Args:
+        taskID: Task ID from worker_run (the session ID).
+        directory: Repository directory to verify. Defaults to server default.
+        max_output_chars: Output cap, clamped to a bounded range.
+
+    Returns:
+        Compact dict with taskID, sessionID, state, status, bounded output
+        counts, directory, and a verification bundle (git status --short,
+        diff --stat, diff --check exit/output, changed files). Handles
+        missing directories and non-git paths cleanly.
+
+    Raises:
+        ValueError: If taskID is empty.
+    """
+    if not taskID or not taskID.strip():
+        raise ValueError("taskID must not be empty")
+    status_result = await worker_status(taskID, directory, True, max_output_chars)
+    client = get_client()
+    effective_dir = directory or client.default_directory
+    verification = await _collect_verification(effective_dir)
+    return {**status_result, "directory": verification["directory"], "verification": verification}
+
+
+@mcp.tool(
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
+async def worker_cleanup(
+    taskID: str,
+    directory: str | None = None,
+    action: str = "delete",
+) -> dict[str, Any]:
+    """Clean up a worker with an explicit abort or delete action.
+
+    All arguments are validated before any side effect runs.
+
+    Args:
+        taskID: Task ID from worker_run (the session ID).
+        directory: Working directory override.
+        action: Either "abort" (stop the worker, keep the session) or
+            "delete" (best-effort abort, then delete the session).
+
+    Returns:
+        Stable compact dict with taskID, sessionID, action, aborted,
+        deleted, and directory.
+
+    Raises:
+        ValueError: If taskID is empty or action is not abort/delete.
+    """
+    if not taskID or not taskID.strip():
+        raise ValueError("taskID must not be empty")
+    normalized = (action or "").strip().lower()
+    if normalized not in ("abort", "delete"):
+        raise ValueError("action must be either 'abort' or 'delete'")
+    client = get_client()
+    effective_dir = directory or client.default_directory
+    if normalized == "abort":
+        await client.abort_session(taskID, directory)
+        return {
+            "taskID": taskID,
+            "sessionID": taskID,
+            "action": "abort",
+            "aborted": True,
+            "deleted": False,
+            "directory": effective_dir,
+        }
+    aborted = True
+    with suppress(Exception):
+        await client.abort_session(taskID, directory)
+    await client.delete_session(taskID, directory)
+    return {
+        "taskID": taskID,
+        "sessionID": taskID,
+        "action": "delete",
+        "aborted": aborted,
+        "deleted": True,
+        "directory": effective_dir,
+    }
+
+
+def apply_tool_profile(profile: str | None = None) -> str:
+    """Apply an MCP tool profile using the public FastMCP visibility API.
+
+    Args:
+        profile: "full" or "worker", or None to read
+            OPENCODE_MCP_TOOL_PROFILE (default "full").
+
+    Returns:
+        The resolved profile name.
+
+    Raises:
+        RuntimeError: If the profile value is invalid.
+    """
+    resolved = resolve_tool_profile(profile)
+    hidden = set(ALL_TOOL_NAMES - WORKER_TOOL_NAMES)
+    if resolved == "worker":
+        mcp.disable(names=hidden)
+    else:
+        mcp.enable(names=hidden)
+    return resolved
+
+
+ACTIVE_TOOL_PROFILE = apply_tool_profile(os.getenv("OPENCODE_MCP_TOOL_PROFILE"))
 
 
 def _truncate(text: str, cap: int) -> str:
