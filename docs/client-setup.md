@@ -45,9 +45,13 @@ Use `--name <name>` via the helper to register under a different server name.
 ## 4. Which URL
 
 - New worker clients: `https://opencode-mcp.manuotel.com/worker-mcp`
-  (exactly the five `worker_*` tools, compact context).
+  (exactly the five `worker_*` tools, compact context). This is the
+  recommended endpoint: it never exposes `exec_run`, so a leaked token
+  cannot become a direct shell.
 - Existing legacy users keep `/mcp`
-  (`https://<your-domain>/mcp`, full 16-tool catalog). Nothing breaks.
+  (`https://<your-domain>/mcp`, full 16-tool catalog). Nothing breaks:
+  `exec_run` stays listed but fails closed unless the bridge operator sets
+  `ENABLE_EXEC_RUN=true` in the deployment env file.
 - Both paths share the same Bearer token. `/health` stays open.
 - Override the helper default with `OPENCODE_MCP_URL=https://<your-domain>/worker-mcp`.
 

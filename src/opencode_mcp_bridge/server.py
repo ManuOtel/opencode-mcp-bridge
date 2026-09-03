@@ -1300,8 +1300,12 @@ async def exec_run(
 ) -> dict[str, Any]:
     """Run a raw shell command on the server. Full access, no sandbox.
 
-    Prefer opencode sessions for code changes (they track diffs). Use this
-    for system ops: docker, systemctl, logs, networking, disk.
+    Opt-in only: disabled unless ENABLE_EXEC_RUN=true. The tool stays
+    listed on /mcp for backward compatibility, but calls fail closed
+    when disabled. Prefer opencode sessions for code changes (they track
+    diffs). Use this for system ops: docker, systemctl, logs, networking,
+    disk. /worker-mcp never exposes this tool; it is the recommended
+    endpoint.
 
     Args:
         command: Shell command to run.
@@ -1310,8 +1314,16 @@ async def exec_run(
 
     Returns:
         Dict with exit_code, stdout, stderr (truncated), and workdir.
+
+    Raises:
+        RuntimeError: If ENABLE_EXEC_RUN is not explicitly enabled.
     """
     settings = get_settings()
+    if not settings.enable_exec_run:
+        raise RuntimeError(
+            "exec_run is disabled: set ENABLE_EXEC_RUN=true to opt in. "
+            "Prefer /worker-mcp session tools for code edits."
+        )
     cwd = workdir or settings.default_directory
     timeout = timeout_s or settings.exec_timeout_s
     timeout = max(1, min(timeout, 600))

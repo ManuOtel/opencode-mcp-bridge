@@ -31,6 +31,21 @@ def _load_dotenv(dotenv_path: Path | None = None) -> None:
             os.environ[key] = value
 
 
+def _as_bool(value: str | None, default: bool = False) -> bool:
+    """Parse an opt-in boolean env var.
+
+    Args:
+        value: Raw env value.
+        default: Returned when value is None or empty.
+
+    Returns:
+        True for 1/true/yes/on (case-insensitive), False otherwise.
+    """
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     """Bridge settings. All secrets come from the environment."""
@@ -47,6 +62,7 @@ class Settings:
     exec_timeout_s: int
     exec_max_output_chars: int
     task_state_path: str
+    enable_exec_run: bool
 
 
 def _required(name: str) -> str:
@@ -101,4 +117,5 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         task_state_path=os.environ.get(
             "TASK_STATE_PATH", "/var/lib/opencode-mcp-bridge/tasks.json"
         ),
+        enable_exec_run=_as_bool(os.environ.get("ENABLE_EXEC_RUN"), default=False),
     )

@@ -111,12 +111,15 @@ Session and utility tools:
 | `abort_session` | Abort a running session. |
 | `delete_session` | Delete a session and its data (clean up tests). |
 | `get_diff` | File diffs from a session. |
-| `exec_run` | Raw shell on the bridge host. No sandbox. Prefer sessions for code edits. |
+| `exec_run` | Raw shell on the bridge host. No sandbox. Opt-in only (`ENABLE_EXEC_RUN=true`); disabled by default. Prefer sessions for code edits. |
 
 ## Endpoints and coexistence
 
 - `/mcp` always serves the full backward-compatible 16-tool catalog, so
   existing clients never lose `list_*`, session, diff, or `exec_run` tools.
+  `exec_run` stays listed but fails closed unless `ENABLE_EXEC_RUN=true`;
+  production hosts that need legacy shell compatibility set it explicitly
+  in the deployment env file.
 - `/worker-mcp` serves exactly the five worker tools (`worker_catalog`,
   `worker_run`, `worker_status`, `worker_verify`, `worker_cleanup`) for the
   Codex plugin and other context-sensitive hosts.
@@ -144,10 +147,15 @@ Session and utility tools:
 
 ## Security and approval profiles
 
+- Security note: `/worker-mcp` is the recommended endpoint. It exposes
+  exactly the five `worker_*` tools and never includes `exec_run`, so a
+  leaked token cannot become a direct shell. Use `/mcp` only for legacy
+  compatibility.
 - Treat `MCP_BEARER_TOKEN` like a root password: long random value
   (`python3 -c "import secrets; print(secrets.token_urlsafe(48))"`), rotate on leak,
   never commit `.env`.
-- `exec_run` plus open directories means anyone with the Bearer token has a shell
+- `exec_run` is opt-in (`ENABLE_EXEC_RUN=true`) and disabled by default.
+  When enabled, plus open directories, anyone with the Bearer token has a shell
   where the bridge runs. Prefer session tools for code edits; reserve `exec_run` for
   system ops (docker, systemctl, logs).
 - `/health` is the only unauthenticated endpoint (reverse-proxy checks). Everything
@@ -186,6 +194,7 @@ Check it: `curl http://127.0.0.1:8087/health` should report OpenCode healthy.
 | `DEFAULT_MODEL_ID` | `muse-spark-1.3-contributor-free` | Default model. |
 | `EXEC_TIMEOUT_S` | `120` | Cap for `exec_run` timeouts. |
 | `EXEC_MAX_OUTPUT_CHARS` | `20000` | Output truncation cap for `exec_run`. |
+| `ENABLE_EXEC_RUN` | `false` | Opt-in for `exec_run` on `/mcp`. Set `true` only where a shell is intended. |
 | `TASK_STATE_PATH` | `/var/lib/opencode-mcp-bridge/tasks.json` | JSON registry for durable tasks (atomic writes, bounded records, no prompts or secrets). |
 
 Put a reverse proxy with TLS in front. Traefik example: `deploy/traefik-opencode-mcp.yaml`.

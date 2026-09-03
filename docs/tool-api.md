@@ -41,7 +41,12 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
 
 `list_providers`, `list_agents`, `create_session`, `send_message`,
 `list_sessions`, `get_session`, `list_messages`, `abort_session`,
-`delete_session`, `get_diff`, `exec_run` (raw shell, full profile only).
+`delete_session`, `get_diff`, `exec_run` (raw shell, full profile only,
+opt-in via `ENABLE_EXEC_RUN=true`, disabled by default).
+
+Security note: `/worker-mcp` is the recommended endpoint. It serves only
+the five `worker_*` tools and never exposes `exec_run`. Use `/mcp` only
+for legacy compatibility.
 
 ## Endpoints
 
@@ -50,6 +55,9 @@ Two Streamable HTTP endpoints share one Bearer token; `GET /health` stays open.
 - `/mcp`: full backward-compatible 16-tool catalog for existing clients
   (`worker_*` plus `list_*`, `create_session`, `send_message`, `get_session`,
   `list_messages`, `abort_session`, `delete_session`, `get_diff`, `exec_run`).
+  `exec_run` stays listed for compatibility but fails closed unless
+  `ENABLE_EXEC_RUN=true`; production hosts that need it set the flag
+  explicitly in the deployment env file.
 - `/worker-mcp`: exactly the five `worker_*` tools (`worker_catalog`,
   `worker_run`, `worker_status`, `worker_verify`, `worker_cleanup`) so plugin
   hosts avoid context bloat. The Codex plugin (`.mcp.json`) points here.
