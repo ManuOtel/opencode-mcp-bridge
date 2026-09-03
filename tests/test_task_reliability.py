@@ -29,6 +29,9 @@ class _FakeTaskClient:
         self.deleted: list[tuple[Any, Any]] = []
         self.prompt_error: Exception | None = None
         self.delete_error: Exception | None = None
+        self.session_error: Exception | None = None
+        self.missing_sessions: set[str] = set()
+        self.get_session_calls: list[tuple[Any, Any]] = []
         self.status_map: dict[str, Any] = {}
         self.latest: dict[str, Any] = {
             "messageID": None,
@@ -67,6 +70,14 @@ class _FakeTaskClient:
 
     async def abort_session(self, session_id: str, directory: Any = None) -> bool:
         return True
+
+    async def get_session(self, session_id: str, directory: Any = None) -> dict[str, Any]:
+        self.get_session_calls.append((session_id, directory))
+        if self.session_error is not None:
+            raise self.session_error
+        if session_id in self.missing_sessions:
+            raise OpencodeError("GET", f"/session/{session_id}", 404, "not found")
+        return {"id": session_id, "title": None, "directory": directory}
 
     async def get_session_status(self, directory: Any = None) -> dict[str, Any]:
         self.status_dirs.append(directory)
@@ -403,3 +414,58 @@ def test_concurrent_distinct_tasks_keep_all_records(
     stored = json.loads(path.read_text())["tasks"]
     for result in results:
         assert result["taskID"] in stored
+
+
+def test_retry_recreates_session_missing_from_opencode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A retry whose recorded session is gone recreates it, not dedup."""
+    path = _state_file(monkeypatch, tmp_path)
+    fake = _patch(monkeypatch)
+    first = asyncio.run(server.worker_run("do X", directory="/tmp/w", requestID="req-gone"))
+    assert first["deduplicated"] is False
+    fake.missing_sessions.add(first["taskID"])
+    second = asyncio.run(server.worker_run("do X", directory="/tmp/w", requestID="req-gone"))
+    assert second["deduplicated"] is False
+    assert second["taskID"] != first["taskID"]
+    assert len(fake.created) == 2
+    stored = json.loads(path.read_text())["tasks"]
+    assert second["taskID"] in stored
+    assert first["taskID"] not in stored
+    with pytest.raises(ValueError, match="different inputs"):
+        asyncio.run(server.worker_run("other", directory="/tmp/w", requestID="req-gone"))
+    assert len(fake.created) == 2
+
+
+def test_retry_uncertain_liveness_keeps_stored_task(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Non-404 liveness failures return the stored task without side effects."""
+    _state_file(monkeypatch, tmp_path)
+    fake = _patch(monkeypatch)
+    first = asyncio.run(server.worker_run("do X", directory="/tmp/w", requestID="req-flaky"))
+    fake.session_error = OpencodeError("GET", "/session/ses_1", 500, "flaky")
+    second = asyncio.run(server.worker_run("do X", directory="/tmp/w", requestID="req-flaky"))
+    assert second["deduplicated"] is True
+    assert second["taskID"] == first["taskID"]
+    assert len(fake.created) == 1
+
+
+def test_concurrent_atomic_saves_leave_valid_registry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Concurrent registry writes never interleave into corrupt JSON."""
+    import concurrent.futures
+
+    path = _state_file(monkeypatch, tmp_path)
+
+    def _write(n: int) -> None:
+        server._save_task_state({f"ses_{n}": {"taskID": f"ses_{n}"}})
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(_write, range(32)))
+    data = json.loads(path.read_text())
+    assert set(data) == {"version", "tasks"}
+    assert isinstance(data["tasks"], dict)
+    assert len(data["tasks"]) == 1
+    assert list(path.parent.glob(".tasks.*.tmp")) == []

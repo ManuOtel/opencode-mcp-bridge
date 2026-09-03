@@ -14,9 +14,12 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
   background work. Returns `taskID` (= sessionID), state, model, directory, title,
   `requestID`, and `deduplicated`. Pass `requestID` for idempotent retries: same ID
   with the same inputs returns the existing task without a second session;
-  conflicting reuse fails before side effects. Every task is recorded in
-  `TASK_STATE_PATH` JSON (bounded, atomic, no prompt or credentials); prompt
-  failure removes the record and deletes the session best-effort.
+  conflicting reuse fails before side effects. If the recorded session no
+  longer exists in OpenCode, a same-input retry recreates it
+  (`deduplicated=false`); uncertain liveness keeps the stored task with no
+  side effects. Every task is recorded in `TASK_STATE_PATH` JSON (bounded,
+  atomic unique-temp-file writes, no prompt or credentials); prompt failure
+  removes the record and deletes the session best-effort.
 - `worker_status(taskID, directory?, include_output=true, max_output_chars=12000)`:
   poll state (`running`/`idle`/`error`/`unknown`) plus `messageID` and bounded
   latest output only, plus bounded `directory`. `/session/status` lists active sessions only, so an

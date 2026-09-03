@@ -32,7 +32,9 @@ by `worker_run` when it differs from the server default, or status reads `unknow
 When omitted, `worker_status` and `worker_verify` recover the saved directory
 from the durable task registry (`TASK_STATE_PATH`). Tasks are idempotent by
 `requestID`: same ID plus same inputs returns the existing task with
-`deduplicated=true`; conflicting reuse fails before side effects.
+`deduplicated=true`; conflicting reuse fails before side effects. If the
+recorded session is gone from OpenCode, the retry recreates it
+(`deduplicated=false`).
 States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
 `skills/recover-opencode-task/SKILL.md`).
 

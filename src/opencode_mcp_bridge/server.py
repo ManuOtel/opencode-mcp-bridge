@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import os
+import tempfile
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from opencode_mcp_bridge.config import Settings, load_settings
-from opencode_mcp_bridge.opencode_client import OpencodeClient
+from opencode_mcp_bridge.opencode_client import OpencodeClient, OpencodeError
 
 WORKER_INSTRUCTIONS = (
     "Worker-first bridge to self-hosted opencode. "
@@ -780,7 +781,11 @@ def _save_task_state(tasks: dict[str, dict[str, Any]]) -> None:
     """Persist task records atomically with bounded size.
 
     Oldest records are evicted first when over TASK_MAX_RECORDS. Writes
-    go to a temp file in the same directory followed by os.replace.
+    go to a uniquely named temp file (O_EXCL via tempfile.mkstemp) in the
+    same directory, are fsynced, then atomically moved over the registry
+    with os.replace. Unique names keep concurrent writers from interleaving
+    bytes into one shared temp file; the parent directory is fsynced
+    best-effort so the rename survives a crash.
 
     Args:
         tasks: Map of taskID to record dicts.
@@ -795,19 +800,30 @@ def _save_task_state(tasks: dict[str, dict[str, Any]]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise RuntimeError(f"task registry at {path} is unwritable: {exc.strerror or 'I/O error'}")
-    tmp_name = f".tasks.{os.getpid()}.tmp"
-    tmp_path = path.parent / tmp_name
+    payload = json.dumps({"version": 1, "tasks": bounded})
     try:
-        tmp_path.write_text(json.dumps({"version": 1, "tasks": bounded}))
-        os.replace(tmp_path, path)
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".tasks.", suffix=".tmp")
+    except OSError as exc:
+        raise RuntimeError(f"task registry at {path} is unwritable: {exc.strerror or 'I/O error'}")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+        with suppress(OSError, AttributeError):
+            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
     except OSError as exc:
         with suppress(OSError):
-            tmp_path.unlink()
+            os.unlink(tmp_name)
         raise RuntimeError(f"task registry at {path} is unwritable: {exc.strerror or 'I/O error'}")
     finally:
         with suppress(OSError):
-            if tmp_path.exists():
-                tmp_path.unlink()
+            os.unlink(tmp_name)
 
 
 def _find_task_by_request(
@@ -826,6 +842,30 @@ def _find_task_by_request(
         if record.get("requestID") == request_id:
             return record
     return None
+
+
+async def _recorded_session_alive(client: Any, task_id: str, directory: Any) -> bool:
+    """Check whether a recorded session still exists in OpenCode.
+
+    A 404 (or an empty lookup result) means the session is gone and a retry
+    may recreate it. Any other lookup failure returns True so retries stay
+    side-effect-free instead of risking a duplicate session.
+
+    Args:
+        client: Opencode client.
+        task_id: Recorded session/task ID.
+        directory: Recorded directory for the directory-scoped lookup.
+
+    Returns:
+        True when the session is present or its state is uncertain.
+    """
+    try:
+        session = await client.get_session(task_id, directory)
+    except OpencodeError as exc:
+        return exc.status != 404
+    except Exception:  # noqa: BLE001 - uncertain state must not trigger recreation
+        return True
+    return isinstance(session, dict) and bool(session.get("id"))
 
 
 def _build_task_record(
@@ -917,13 +957,18 @@ async def worker_run(
     Model overrides, request IDs, and directory lengths are validated
     before anything is created, so invalid input has no side effects. When
     requestID repeats with the same inputs, the existing task returns with
-    deduplicated=true and no second session is created. Conflicting reuse
-    of a requestID fails before any session is created. Every task is
-    recorded in TASK_STATE_PATH JSON (no prompt or credentials); if the
-    async prompt fails, the record is removed and the new session is
-    deleted best-effort, then the original error is re-raised. A registry
-    save failure also deletes the new session and raises instead of
-    reporting success. The read/check/create/save/prompt sequence holds a
+    deduplicated=true and no second session is created. If the recorded
+    session no longer exists in OpenCode (registry survived while the
+    session did not, e.g. after cleanup or server data loss), the retry
+    transparently recreates it and returns deduplicated=false. Uncertain
+    liveness (non-404 lookup failures) keeps the stored task with no side
+    effects rather than risking a duplicate. Conflicting reuse of a
+    requestID fails before any session is created. Every task is recorded
+    in TASK_STATE_PATH JSON (no prompt or credentials); if the async prompt
+    fails, the record is removed and the new session is deleted
+    best-effort, then the original error is re-raised. A registry save
+    failure also deletes the new session and raises instead of reporting
+    success. The read/check/create/save/prompt sequence holds a
     process-wide asyncio lock so concurrent retries cannot duplicate
     sessions or clobber records.
 
@@ -965,18 +1010,26 @@ async def worker_run(
                 if existing.get("fingerprint") != fingerprint:
                     raise ValueError("requestID was already used with different inputs")
                 task_id = existing.get("taskID")
-                return {
-                    "taskID": task_id,
-                    "sessionID": task_id,
-                    "state": "running",
-                    "providerID": existing.get("providerID", resolved_provider),
-                    "modelID": existing.get("modelID", resolved_model),
-                    "directory": existing.get("directory", ""),
-                    "title": existing.get("title"),
-                    "agent": existing.get("agent"),
-                    "requestID": normalized_request,
-                    "deduplicated": True,
-                }
+                alive = (
+                    await _recorded_session_alive(client, task_id, existing.get("directory"))
+                    if isinstance(task_id, str) and task_id
+                    else False
+                )
+                if alive:
+                    return {
+                        "taskID": task_id,
+                        "sessionID": task_id,
+                        "state": "running",
+                        "providerID": existing.get("providerID", resolved_provider),
+                        "modelID": existing.get("modelID", resolved_model),
+                        "directory": existing.get("directory", ""),
+                        "title": existing.get("title"),
+                        "agent": existing.get("agent"),
+                        "requestID": normalized_request,
+                        "deduplicated": True,
+                    }
+                if isinstance(task_id, str):
+                    stored_tasks.pop(task_id, None)
         session = await client.create_session(title, directory)
         session_id = session.get("id") if isinstance(session, dict) else None
         if not session_id:
