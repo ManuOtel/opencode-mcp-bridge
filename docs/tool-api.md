@@ -5,6 +5,11 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
 ## Worker tools
 
 - `worker_catalog(query?, free_only=true, connected_only=true, limit=20)`: list free models.
+  Free is conservative: only models whose ID or name contains an explicit
+  `free` marker (case-insensitive) count as free. Zero token-cost metadata
+  alone never counts as free; cost metadata is preserved in entries but does
+  not infer billing entitlement. The configured default provider/model sorts
+  first when it survives filters, then deterministic provider/model order.
 - `worker_run(message, directory?, title?, agent?, providerID?, modelID?)`: start
   background work. Returns `taskID` (= sessionID), state, model, directory, title.
 - `worker_status(taskID, directory?, include_output=true, max_output_chars=12000)`:

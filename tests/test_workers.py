@@ -258,7 +258,7 @@ def test_map_worker_state(raw: Any, expected: str) -> None:
     [
         ("muse-spark-1.3-contributor-free", "Spark", None, True),
         ("gpt-5", "GPT-5 FREE tier", None, True),
-        ("gpt-5", "GPT-5", {"input": 0, "output": 0}, True),
+        ("gpt-5", "GPT-5", {"input": 0, "output": 0}, False),
         ("gpt-5", "GPT-5", {"input": 1, "output": 0}, False),
         ("gpt-5", "GPT-5", None, False),
         ("gpt-5", "GPT-5", {"input": 0}, False),
@@ -266,7 +266,7 @@ def test_map_worker_state(raw: Any, expected: str) -> None:
     ],
 )
 def test_is_free_model(model_id: str, name: str, cost: Any, expected: bool) -> None:
-    """Free means a free marker or zero input/output cost metadata."""
+    """Free means an explicit free marker only; zero cost never counts."""
     assert _is_free_model(model_id, name, cost) is expected
 
 
@@ -685,3 +685,107 @@ def test_worker_catalog_limit_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(capped["models"]) == 100
     assert capped["total"] == 105
     assert len(floored["models"]) == 1
+
+
+def test_worker_catalog_excludes_openai_zero_cost_without_free_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAI zero-cost metadata without 'free' is excluded by free_only."""
+    fake = _patch_client(monkeypatch)
+    fake.providers_raw = {
+        "connected": ["openai", "opencode"],
+        "default": {},
+        "all": [
+            {
+                "id": "openai",
+                "name": "OpenAI",
+                "models": {
+                    "gpt-5": {
+                        "id": "gpt-5",
+                        "name": "GPT-5",
+                        "cost": {"input": 0, "output": 0},
+                    },
+                },
+            },
+            {
+                "id": "opencode",
+                "name": "Opencode",
+                "models": {
+                    "muse-spark-1.3-contributor-free": {
+                        "id": "muse-spark-1.3-contributor-free",
+                        "name": "Muse Spark Free",
+                        "cost": {"input": 0, "output": 0},
+                    },
+                },
+            },
+        ],
+    }
+    result = asyncio.run(server.worker_catalog())
+    assert [m["modelID"] for m in result["models"]] == ["muse-spark-1.3-contributor-free"]
+    assert result["total"] == 1
+
+
+def test_worker_catalog_keeps_zero_cost_metadata_without_inferring_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cost metadata stays in output even when it does not imply free."""
+    fake = _patch_client(monkeypatch)
+    fake.providers_raw = {
+        "connected": ["openai"],
+        "default": {},
+        "all": [
+            {
+                "id": "openai",
+                "name": "OpenAI",
+                "models": {
+                    "gpt-5": {
+                        "id": "gpt-5",
+                        "name": "GPT-5",
+                        "cost": {"input": 0, "output": 0},
+                    },
+                },
+            },
+        ],
+    }
+    result = asyncio.run(server.worker_catalog(free_only=False, connected_only=False))
+    assert result["total"] == 1
+    entry = result["models"][0]
+    assert entry["free"] is False
+    assert entry["cost"] == {"input": 0, "output": 0}
+
+
+def test_worker_catalog_default_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configured default survives filters and sorts first, then provider/model order."""
+    fake = _patch_client(monkeypatch)
+    fake.providers_raw = {
+        "connected": ["opencode", "zzz"],
+        "default": {},
+        "all": [
+            {
+                "id": "zzz",
+                "name": "Zzz",
+                "models": {
+                    "aaa-free": {"id": "aaa-free", "name": "Aaa Free"},
+                },
+            },
+            {
+                "id": "opencode",
+                "name": "Opencode",
+                "models": {
+                    "muse-spark-1.3-contributor-free": {
+                        "id": "muse-spark-1.3-contributor-free",
+                        "name": "Muse Spark Free",
+                    },
+                    "other-free": {"id": "other-free", "name": "Other Free"},
+                },
+            },
+        ],
+    }
+    result = asyncio.run(server.worker_catalog())
+    assert [m["modelID"] for m in result["models"]] == [
+        "muse-spark-1.3-contributor-free",
+        "other-free",
+        "aaa-free",
+    ]
+    assert result["models"][0]["providerID"] == fake.default_provider_id
+    assert result["models"][0]["modelID"] == fake.default_model_id

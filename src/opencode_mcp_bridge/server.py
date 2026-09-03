@@ -399,26 +399,24 @@ def _map_worker_state(status: Any) -> str:
     return "unknown"
 
 
-def _is_free_model(model_id: Any, name: Any, cost: Any) -> bool:
-    """Check whether a model counts as free.
+def _is_free_model(model_id: Any, name: Any, cost: Any = None) -> bool:
+    """Check whether a model counts as free (conservative).
+
+    Only an explicit "free" marker in the model ID or name counts,
+    case-insensitive. Zero cost metadata alone never counts as free:
+    cost metadata is kept in catalog output but does not infer billing
+    entitlement, per the no-paid/no-Copilot policy.
 
     Args:
         model_id: Model ID string.
         name: Human-readable model name.
-        cost: Cost metadata dict with input/output numbers when present.
+        cost: Ignored cost metadata (kept for backward compatibility).
 
     Returns:
-        True when the ID/name contains "free" or when cost metadata
-        exists with both input and output at zero.
+        True only when the ID/name contains "free" (case-insensitive).
     """
-    if "free" in f"{model_id or ''} {name or ''}".lower():
-        return True
-    if isinstance(cost, dict) and cost.get("input") is not None and cost.get("output") is not None:
-        try:
-            return float(cost["input"]) == 0 and float(cost["output"]) == 0
-        except (TypeError, ValueError):
-            return False
-    return False
+    _ = cost
+    return "free" in f"{model_id or ''} {name or ''}".lower()
 
 
 def _bound_text(value: Any, cap: int) -> str:
@@ -741,6 +739,12 @@ async def worker_catalog(
 ) -> dict[str, Any]:
     """List worker models with free/connected filters.
 
+    Free means the model ID or name contains an explicit "free" marker
+    (case-insensitive). Zero token-cost metadata alone never counts as
+    free; cost metadata is preserved in entries but does not infer
+    billing entitlement. The configured default provider/model sorts
+    first when it survives filters, then provider/model order.
+
     Args:
         query: Case-insensitive substring filter over provider and model
             IDs/names. Omit for no text filtering.
@@ -799,7 +803,10 @@ async def worker_catalog(
             models.append(entry)
     models.sort(
         key=lambda item: (
-            not item["connected"],
+            not (
+                item["providerID"] == client.default_provider_id
+                and item["modelID"] == client.default_model_id
+            ),
             item["providerID"] or "",
             item["modelID"] or "",
         )
