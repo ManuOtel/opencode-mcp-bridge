@@ -9,6 +9,17 @@ This repo ships a Codex plugin (`opencode-worker`, see `.codex-plugin/`) with a
 worker playbook (`skills/`) for async background workers. Worker-first: scope a
 task, poll it, verify the diff, then clean up.
 
+## Quick connect
+
+```bash
+export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+./scripts/install-client.sh both
+```
+
+See [docs/client-setup.md](docs/client-setup.md) for copy/paste Codex and
+Claude Code commands, token handling, `/worker-mcp` vs `/mcp` URLs, and the
+opinionated plugin skills.
+
 ## Worker quickstart (start here)
 
 1. Pick a model: `worker_catalog` (defaults to free + connected only).
