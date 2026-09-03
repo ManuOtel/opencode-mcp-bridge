@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "opencode": {
+      "type": "http",
+      "url": "https://opencode-mcp.manuotel.com/worker-mcp",
+      "bearer_token_env_var": "OPENCODE_MCP_BEARER_TOKEN",
+      "enabled": true,
+      "tools": {
+        "worker_run": { "approval_mode": "prompt" },
+        "worker_cleanup": { "approval_mode": "prompt" },
+        "worker_status": { "approval_mode": "approve" },
+        "worker_catalog": { "approval_mode": "approve" },
+        "worker_verify": { "approval_mode": "approve" }
+      }
+    }
+  }
+}

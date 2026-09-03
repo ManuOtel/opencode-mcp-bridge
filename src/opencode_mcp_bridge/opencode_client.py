@@ -77,6 +77,8 @@ class OpencodeClient:
         username: str,
         password: str,
         default_directory: str | None = None,
+        default_provider_id: str = "opencode",
+        default_model_id: str = "muse-spark-1.3-contributor-free",
         timeout_s: float = 600.0,
     ) -> None:
         """Create a client.
@@ -87,6 +89,8 @@ class OpencodeClient:
             password: Basic auth password.
             default_directory: Directory used when callers omit it.
                 Defaults to the runtime user's home directory.
+            default_provider_id: Provider used when send_message omits a model.
+            default_model_id: Model used when send_message omits a model.
             timeout_s: HTTP timeout; prompts can take minutes.
         """
         self._client = httpx.AsyncClient(
@@ -95,6 +99,8 @@ class OpencodeClient:
             timeout=httpx.Timeout(timeout_s),
         )
         self.default_directory = default_directory or os.path.expanduser("~")
+        self.default_provider_id = default_provider_id
+        self.default_model_id = default_model_id
 
     async def close(self) -> None:
         """Close the underlying HTTP connection pool."""
@@ -103,6 +109,56 @@ class OpencodeClient:
     def _dir(self, directory: str | None) -> str:
         """Resolve the effective opencode working directory."""
         return directory or self.default_directory
+
+    def resolve_model(self, provider_id: str | None, model_id: str | None) -> tuple[str, str]:
+        """Validate a model override pair and apply configured defaults.
+
+        Args:
+            provider_id: Optional model override provider.
+            model_id: Optional model override model.
+
+        Returns:
+            Tuple of (provider_id, model_id) with defaults resolved.
+
+        Raises:
+            ValueError: If only one of provider_id/model_id is given.
+        """
+        if bool(provider_id) != bool(model_id):
+            raise ValueError("provider_id and model_id must be given together or omitted")
+        return (
+            provider_id or self.default_provider_id,
+            model_id or self.default_model_id,
+        )
+
+    def _message_body(
+        self,
+        message: str,
+        provider_id: str | None,
+        model_id: str | None,
+        agent: str | None,
+    ) -> tuple[dict[str, Any], str, str]:
+        """Build a message/prompt_async body, applying configured model defaults.
+
+        Args:
+            message: User message text.
+            provider_id: Optional model override provider.
+            model_id: Optional model override model.
+            agent: Optional agent override.
+
+        Returns:
+            Tuple of (body, provider_id, model_id) with defaults resolved.
+
+        Raises:
+            ValueError: If only one of provider_id/model_id is given.
+        """
+        resolved_provider, resolved_model = self.resolve_model(provider_id, model_id)
+        body: dict[str, Any] = {
+            "parts": [{"type": "text", "text": message}],
+            "model": {"providerID": resolved_provider, "modelID": resolved_model},
+        }
+        if agent:
+            body["agent"] = agent
+        return body, resolved_provider, resolved_model
 
     async def _request(
         self,
@@ -188,35 +244,21 @@ class OpencodeClient:
         self,
         title: str | None = None,
         directory: str | None = None,
-        agent: str | None = None,
-        provider_id: str | None = None,
-        model_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new opencode session.
 
         Args:
             title: Human-readable session title.
             directory: Working directory for the session (full access allowed).
-            agent: Agent name, e.g. plan or build.
-            provider_id: Provider for the session default model.
-            model_id: Model for the session default model.
-
         Returns:
             The created session object.
 
         Raises:
             OpencodeError: If the API call fails.
-            ValueError: If only one of provider_id/model_id is given.
         """
-        if bool(provider_id) != bool(model_id):
-            raise ValueError("provider_id and model_id must be given together or omitted")
         body: dict[str, Any] = {}
         if title:
             body["title"] = title
-        if agent:
-            body["agent"] = agent
-        if provider_id and model_id:
-            body["model"] = {"id": model_id, "providerID": provider_id}
         return await self._request(
             "POST", "/session", params={"directory": self._dir(directory)}, body=body
         )
@@ -224,7 +266,7 @@ class OpencodeClient:
     async def send_message(
         self,
         session_id: str,
-        prompt: str,
+        message: str,
         provider_id: str | None = None,
         model_id: str | None = None,
         agent: str | None = None,
@@ -234,7 +276,7 @@ class OpencodeClient:
 
         Args:
             session_id: Session ID (ses_...).
-            prompt: User message text.
+            message: User message text.
             provider_id: Optional model override provider.
             model_id: Optional model override model.
             agent: Optional agent override.
@@ -247,25 +289,148 @@ class OpencodeClient:
             OpencodeError: If the API call fails.
             ValueError: If only one of provider_id/model_id is given.
         """
-        if bool(provider_id) != bool(model_id):
-            raise ValueError("provider_id and model_id must be given together or omitted")
-        body: dict[str, Any] = {"parts": [{"type": "text", "text": prompt}]}
-        if provider_id and model_id:
-            body["model"] = {"providerID": provider_id, "modelID": model_id}
-        if agent:
-            body["agent"] = agent
+        body, _, _ = self._message_body(message, provider_id, model_id, agent)
         path = f"/session/{quote(session_id, safe='')}/message"
         data = await self._request(
             "POST", path, params={"directory": self._dir(directory)}, body=body
         )
         info = data.get("info", {}) if isinstance(data, dict) else {}
         parts = data.get("parts", []) if isinstance(data, dict) else []
+        error = info.get("error") if isinstance(info, dict) else None
+        if error:
+            if isinstance(error, dict):
+                error_data = error.get("data")
+                if isinstance(error_data, dict):
+                    snippet = error_data.get("message")
+                elif isinstance(error_data, str):
+                    snippet = error_data
+                else:
+                    snippet = error.get("message") or error.get("name")
+                snippet = snippet or str(error)
+            else:
+                snippet = str(error)
+            raise OpencodeError("POST", path, 0, str(snippet)[:500])
+        text = extract_text(parts if isinstance(parts, list) else [])
+        if not text:
+            raise OpencodeError("POST", path, 200, "response contained no usable text")
+        model = info.get("model") if isinstance(info, dict) else None
+        if model is None and isinstance(info, dict):
+            provider_id_value = info.get("providerID")
+            model_id_value = info.get("modelID")
+            if provider_id_value is not None and model_id_value is not None:
+                model = {"providerID": provider_id_value, "modelID": model_id_value}
         return {
             "sessionID": session_id,
-            "messageID": info.get("id"),
-            "text": extract_text(parts if isinstance(parts, list) else []),
-            "model": info.get("model"),
+            "messageID": info.get("id") if isinstance(info, dict) else None,
+            "text": text,
+            "model": model,
         }
+
+    async def get_session_status(self, directory: str | None = None) -> dict[str, Any]:
+        """Get live status for all sessions.
+
+        Args:
+            directory: Opencode working directory.
+
+        Returns:
+            Map of session ID to raw status dict, e.g. {type: idle|busy|retry}.
+        """
+        data = await self._request(
+            "GET", "/session/status", params={"directory": self._dir(directory)}
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def get_providers_raw(self) -> dict[str, Any]:
+        """Get the raw /provider payload with per-model cost metadata.
+
+        Returns:
+            Raw dict with all/connected/default keys. Never exposes secrets:
+            /config/providers is never called.
+        """
+        data = await self._request("GET", "/provider")
+        return data if isinstance(data, dict) else {}
+
+    async def get_latest_assistant(
+        self,
+        session_id: str,
+        directory: str | None = None,
+        limit: int = 20,
+        max_chars: int | None = None,
+    ) -> dict[str, Any]:
+        """Get the latest assistant message text and error flag.
+
+        Args:
+            session_id: Session ID.
+            directory: Opencode working directory.
+            limit: How many recent messages to scan.
+            max_chars: Cap for the returned text. None means no cap.
+                total_chars always reflects the full untruncated text.
+
+        Returns:
+            Dict with messageID, text, total_chars, and has_error flag.
+        """
+        path = f"/session/{quote(session_id, safe='')}/message"
+        data = await self._request(
+            "GET", path, params={"directory": self._dir(directory), "limit": limit}
+        )
+        items = data if isinstance(data, list) else []
+        for item in reversed(items):
+            if not isinstance(item, dict):
+                continue
+            info = item.get("info", {})
+            if not isinstance(info, dict) or info.get("role") != "assistant":
+                continue
+            parts = item.get("parts", [])
+            chunks = [
+                part["text"]
+                for part in parts
+                if isinstance(part, dict)
+                and part.get("type") == "text"
+                and isinstance(part.get("text"), str)
+            ]
+            full_text = "\n".join(chunks).strip()
+            if max_chars is not None and len(full_text) > max_chars:
+                text = full_text[:max_chars]
+            else:
+                text = full_text
+            return {
+                "messageID": info.get("id"),
+                "text": text,
+                "total_chars": len(full_text),
+                "has_error": bool(info.get("error")),
+            }
+        return {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
+
+    async def prompt_async(
+        self,
+        session_id: str,
+        message: str,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        agent: str | None = None,
+        directory: str | None = None,
+    ) -> bool:
+        """Submit a prompt without waiting for the assistant reply.
+
+        Args:
+            session_id: Session ID (ses_...).
+            message: User message text.
+            provider_id: Optional model override provider.
+            model_id: Optional model override model.
+            agent: Optional agent override.
+            directory: Opencode working directory.
+
+        Returns:
+            True on 204 acceptance.
+
+        Raises:
+            OpencodeError: If the API call fails.
+            ValueError: If only one of provider_id/model_id is given.
+        """
+        body, _, _ = self._message_body(message, provider_id, model_id, agent)
+        path = f"/session/{quote(session_id, safe='')}/prompt_async"
+        await self._request("POST", path, params={"directory": self._dir(directory)}, body=body)
+        return True
 
     async def list_sessions(
         self, directory: str | None = None, limit: int = 30
