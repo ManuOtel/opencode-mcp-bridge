@@ -1,6 +1,6 @@
 [project]
 name = "opencode-mcp-bridge"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP bridge exposing a self-hosted opencode instance over Streamable HTTP"
 readme = "README.md"
 license = { text = "PolyForm-Noncommercial-1.0.0" }
