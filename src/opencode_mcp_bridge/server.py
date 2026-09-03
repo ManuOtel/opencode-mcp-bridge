@@ -360,6 +360,67 @@ TASK_DIRECTORY_MAX_CHARS = 500
 TASK_TITLE_MAX_CHARS = 200
 TASK_AGENT_MAX_CHARS = 100
 
+_TASK_LOCK: asyncio.Lock | None = None
+_TASK_LOCK_LOOP: Any = None
+
+
+def _get_task_lock() -> asyncio.Lock:
+    """Return the process-wide lock serializing task registry mutations.
+
+    The lock is re-created if the running event loop changed, so sequential
+    asyncio.run calls in tests each get a usable lock while concurrent
+    coroutines on one loop share it.
+
+    Returns:
+        Shared asyncio lock for task registry sequences.
+    """
+    global _TASK_LOCK, _TASK_LOCK_LOOP
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if _TASK_LOCK is None or (loop is not None and _TASK_LOCK_LOOP is not loop):
+        _TASK_LOCK = asyncio.Lock()
+        _TASK_LOCK_LOOP = loop
+    return _TASK_LOCK
+
+
+def _canonical_task_dir(directory: str | None) -> str:
+    """Normalize a directory for fingerprinting.
+
+    None and empty mean the server default and hash identically. Trailing
+    separators are stripped so equivalent spellings do not conflict.
+
+    Args:
+        directory: Requested directory or None.
+
+    Returns:
+        Canonical directory string.
+    """
+    if directory is None:
+        return ""
+    cleaned = directory.strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > 1:
+        cleaned = cleaned.rstrip("/")
+    return cleaned or ""
+
+
+def _validate_task_directory(directory: str, *, what: str = "directory") -> None:
+    """Reject an over-long directory before any side effect.
+
+    Args:
+        directory: Requested or effective directory path.
+        what: Field name used in the error message.
+
+    Raises:
+        ValueError: If the path exceeds TASK_DIRECTORY_MAX_CHARS.
+    """
+    if len(directory) > TASK_DIRECTORY_MAX_CHARS:
+        raise ValueError(f"{what} must be at most {TASK_DIRECTORY_MAX_CHARS} chars")
+
+
 WORKER_TOOL_NAMES = frozenset(
     {
         "worker_run",
@@ -659,7 +720,7 @@ def _fingerprint_task(
     canonical = json.dumps(
         {
             "message": message,
-            "directory": directory or "",
+            "directory": _canonical_task_dir(directory),
             "title": title or "",
             "agent": agent or "",
             "providerID": provider_id,
@@ -674,28 +735,44 @@ def _fingerprint_task(
 def _load_task_state() -> dict[str, dict[str, Any]]:
     """Load durable task records keyed by taskID.
 
+    Missing files return empty. Corrupt JSON, wrong shapes, or unreadable
+    files raise a safe RuntimeError (path only, never file contents or
+    secrets) so callers fail closed instead of duplicating sessions.
+
     Returns:
-        Map of taskID to bounded record dicts. Missing files return
-        empty; corrupt JSON recovers as empty so workers stay usable.
+        Map of taskID to record dicts.
+
+    Raises:
+        RuntimeError: If the registry file is corrupt, mis-shaped, or
+            unreadable.
     """
     path = _task_state_path()
     try:
         raw = path.read_text()
     except FileNotFoundError:
         return {}
-    except OSError:
-        return {}
+    except OSError as exc:
+        raise RuntimeError(f"task registry at {path} is unreadable: {exc.strerror or 'I/O error'}")
     try:
         data = json.loads(raw)
     except ValueError:
-        return {}
-    tasks = data.get("tasks") if isinstance(data, dict) else None
+        raise RuntimeError(f"task registry at {path} is corrupt: invalid JSON")
+    if not isinstance(data, dict):
+        raise RuntimeError(  # noqa: TRY004 - registry contract requires RuntimeError
+            f"task registry at {path} is corrupt: expected a JSON object"
+        )
+    tasks = data.get("tasks")
     if not isinstance(tasks, dict):
-        return {}
+        raise RuntimeError(  # noqa: TRY004 - registry contract requires RuntimeError
+            f"task registry at {path} is corrupt: expected a tasks object"
+        )
     cleaned: dict[str, dict[str, Any]] = {}
     for task_id, record in tasks.items():
-        if isinstance(task_id, str) and isinstance(record, dict):
-            cleaned[task_id] = record
+        if not isinstance(task_id, str) or not isinstance(record, dict):
+            raise RuntimeError(  # noqa: TRY004 - registry contract requires RuntimeError
+                f"task registry at {path} is corrupt: bad record shape"
+            )
+        cleaned[task_id] = record
     return cleaned
 
 
@@ -707,21 +784,26 @@ def _save_task_state(tasks: dict[str, dict[str, Any]]) -> None:
 
     Args:
         tasks: Map of taskID to record dicts.
+
+    Raises:
+        RuntimeError: If the registry cannot be written. The message
+            carries the path only, never prompts or secrets.
     """
     bounded = dict(list(tasks.items())[-TASK_MAX_RECORDS:]) if tasks else {}
     path = _task_state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return
+    except OSError as exc:
+        raise RuntimeError(f"task registry at {path} is unwritable: {exc.strerror or 'I/O error'}")
     tmp_name = f".tasks.{os.getpid()}.tmp"
     tmp_path = path.parent / tmp_name
     try:
         tmp_path.write_text(json.dumps({"version": 1, "tasks": bounded}))
         os.replace(tmp_path, path)
-    except OSError:
+    except OSError as exc:
         with suppress(OSError):
             tmp_path.unlink()
+        raise RuntimeError(f"task registry at {path} is unwritable: {exc.strerror or 'I/O error'}")
     finally:
         with suppress(OSError):
             if tmp_path.exists():
@@ -762,7 +844,8 @@ def _build_task_record(
         task_id: Session/task ID.
         request_id: Normalized request ID or None.
         fingerprint: Input hash for conflict detection.
-        directory: Effective directory to recover later.
+        directory: Effective directory to recover later, stored exactly
+            (over-long paths are rejected before creation, never truncated).
         title: Optional title.
         agent: Optional agent.
         provider_id: Resolved provider.
@@ -771,7 +854,7 @@ def _build_task_record(
     Returns:
         Bounded record dict safe for JSON persistence.
     """
-    dir_text = _bound_text(directory or "", TASK_DIRECTORY_MAX_CHARS)
+    dir_text = directory or ""
     title_text = _bound_text(title or "", TASK_TITLE_MAX_CHARS) if title else None
     agent_text = _bound_text(agent or "", TASK_AGENT_MAX_CHARS) if agent else None
     return {
@@ -787,10 +870,16 @@ def _build_task_record(
 
 
 def _remove_task_record(task_id: str) -> None:
-    """Remove one task record best-effort.
+    """Remove one task record.
+
+    Callers mutating the registry must hold _get_task_lock so concurrent
+    worker_run sequences cannot interleave between this load and save.
 
     Args:
         task_id: Task ID to drop.
+
+    Raises:
+        RuntimeError: If the registry is corrupt or unwritable.
     """
     tasks = _load_task_state()
     if task_id in tasks:
@@ -825,14 +914,18 @@ async def worker_run(
 ) -> dict[str, Any]:
     """Start a background worker: create a session and prompt it without waiting.
 
-    Model overrides and request IDs are validated before anything is
-    created, so invalid input has no side effects. When requestID repeats
-    with the same inputs, the existing task returns with deduplicated=true
-    and no second session is created. Conflicting reuse of a requestID
-    fails before any session is created. Every task is recorded in
-    TASK_STATE_PATH JSON (no prompt or credentials); if the async prompt
-    fails, the record is removed and the new session is deleted
-    best-effort, then the original error is re-raised.
+    Model overrides, request IDs, and directory lengths are validated
+    before anything is created, so invalid input has no side effects. When
+    requestID repeats with the same inputs, the existing task returns with
+    deduplicated=true and no second session is created. Conflicting reuse
+    of a requestID fails before any session is created. Every task is
+    recorded in TASK_STATE_PATH JSON (no prompt or credentials); if the
+    async prompt fails, the record is removed and the new session is
+    deleted best-effort, then the original error is re-raised. A registry
+    save failure also deletes the new session and raises instead of
+    reporting success. The read/check/create/save/prompt sequence holds a
+    process-wide asyncio lock so concurrent retries cannot duplicate
+    sessions or clobber records.
 
     Pass the returned directory to worker_status when it differs from the
     configured default: status and messages are directory-scoped. The
@@ -840,7 +933,8 @@ async def worker_run(
 
     Args:
         message: Task prompt for the worker.
-        directory: Working directory (any path allowed).
+        directory: Working directory (any path allowed up to
+            TASK_DIRECTORY_MAX_CHARS).
         title: Session title.
         agent: Optional agent override.
         providerID: Optional model override provider.
@@ -858,66 +952,82 @@ async def worker_run(
     fingerprint = _fingerprint_task(
         message, directory, title, agent, resolved_provider, resolved_model
     )
-    stored_tasks = _load_task_state()
-    if normalized_request is not None:
-        existing = _find_task_by_request(stored_tasks, normalized_request)
-        if existing is not None:
-            if existing.get("fingerprint") != fingerprint:
-                raise ValueError("requestID was already used with different inputs")
-            task_id = existing.get("taskID")
-            return {
-                "taskID": task_id,
-                "sessionID": task_id,
-                "state": "running",
-                "providerID": existing.get("providerID", resolved_provider),
-                "modelID": existing.get("modelID", resolved_model),
-                "directory": existing.get("directory", ""),
-                "title": existing.get("title"),
-                "agent": existing.get("agent"),
-                "requestID": normalized_request,
-                "deduplicated": True,
-            }
-    session = await client.create_session(title, directory)
-    session_id = session.get("id") if isinstance(session, dict) else None
-    if not session_id:
-        raise ValueError("opencode session response contained no id")
-    effective_dir = session.get("directory") if isinstance(session, dict) else None
-    effective_title = session.get("title") if isinstance(session, dict) else None
-    if directory is None:
-        resolved_dir = effective_dir or client.default_directory
+    if directory is not None:
+        _validate_task_directory(directory)
     else:
-        resolved_dir = effective_dir or directory
-    record = _build_task_record(
-        session_id,
-        normalized_request,
-        fingerprint,
-        resolved_dir,
-        effective_title if effective_title is not None else title,
-        agent,
-        resolved_provider,
-        resolved_model,
-    )
-    stored_tasks[session_id] = record
-    _save_task_state(stored_tasks)
-    try:
-        await client.prompt_async(session_id, message, providerID, modelID, agent, directory)
-    except Exception:
-        _remove_task_record(session_id)
-        with suppress(Exception):
-            await client.delete_session(session_id, directory)
-        raise
-    return {
-        "taskID": session_id,
-        "sessionID": session_id,
-        "state": "running",
-        "providerID": resolved_provider,
-        "modelID": resolved_model,
-        "directory": _bound_text(resolved_dir, TASK_DIRECTORY_MAX_CHARS),
-        "title": effective_title if effective_title is not None else title,
-        "agent": agent,
-        "requestID": normalized_request,
-        "deduplicated": False,
-    }
+        _validate_task_directory(client.default_directory)
+    lock = _get_task_lock()
+    async with lock:
+        stored_tasks = _load_task_state()
+        if normalized_request is not None:
+            existing = _find_task_by_request(stored_tasks, normalized_request)
+            if existing is not None:
+                if existing.get("fingerprint") != fingerprint:
+                    raise ValueError("requestID was already used with different inputs")
+                task_id = existing.get("taskID")
+                return {
+                    "taskID": task_id,
+                    "sessionID": task_id,
+                    "state": "running",
+                    "providerID": existing.get("providerID", resolved_provider),
+                    "modelID": existing.get("modelID", resolved_model),
+                    "directory": existing.get("directory", ""),
+                    "title": existing.get("title"),
+                    "agent": existing.get("agent"),
+                    "requestID": normalized_request,
+                    "deduplicated": True,
+                }
+        session = await client.create_session(title, directory)
+        session_id = session.get("id") if isinstance(session, dict) else None
+        if not session_id:
+            raise ValueError("opencode session response contained no id")
+        effective_dir = session.get("directory") if isinstance(session, dict) else None
+        effective_title = session.get("title") if isinstance(session, dict) else None
+        if directory is None:
+            resolved_dir = effective_dir or client.default_directory
+        else:
+            resolved_dir = effective_dir or directory
+        _validate_task_directory(resolved_dir)
+        record = _build_task_record(
+            session_id,
+            normalized_request,
+            fingerprint,
+            resolved_dir,
+            effective_title if effective_title is not None else title,
+            agent,
+            resolved_provider,
+            resolved_model,
+        )
+        stored_tasks[session_id] = record
+        try:
+            _save_task_state(stored_tasks)
+        except Exception:
+            with suppress(Exception):
+                await client.delete_session(session_id, directory)
+            raise
+        try:
+            await client.prompt_async(session_id, message, providerID, modelID, agent, directory)
+        except Exception:
+            with suppress(Exception):
+                tasks = _load_task_state()
+                if session_id in tasks:
+                    del tasks[session_id]
+                    _save_task_state(tasks)
+            with suppress(Exception):
+                await client.delete_session(session_id, directory)
+            raise
+        return {
+            "taskID": session_id,
+            "sessionID": session_id,
+            "state": "running",
+            "providerID": resolved_provider,
+            "modelID": resolved_model,
+            "directory": resolved_dir,
+            "title": effective_title if effective_title is not None else title,
+            "agent": agent,
+            "requestID": normalized_request,
+            "deduplicated": False,
+        }
 
 
 @mcp.tool(
@@ -958,10 +1068,12 @@ async def worker_status(
         Compact dict with taskID, sessionID, state
         (running/idle/error/unknown), raw status, messageID, latest output
         only, output_chars, total_chars, truncated_chars, a truncated
-        flag, and bounded directory. Never dumps full history. GET
-        /session/status contains active sessions only, so an absent raw
-        status with a non-null assistant messageID and no assistant error
-        infers idle; absent status with no assistant stays unknown.
+        flag, and directory. Only output text is bounded; directory paths
+        are returned exactly as requested or saved. Never dumps full
+        history. GET /session/status contains active sessions only, so an
+        absent raw status with a non-null assistant messageID and no
+        assistant error infers idle; absent status with no assistant stays
+        unknown.
     """
     client = get_client()
     saved: dict[str, Any] | None = None
@@ -1012,7 +1124,7 @@ async def worker_status(
         "total_chars": total_chars,
         "truncated_chars": truncated_chars,
         "truncated": truncated,
-        "directory": _bound_text(effective_dir, TASK_DIRECTORY_MAX_CHARS),
+        "directory": effective_dir,
     }
 
 
@@ -1289,9 +1401,7 @@ async def worker_cleanup(
     if directory is None:
         saved_dir = (_load_task_state().get(taskID) or {}).get("directory")
     query_dir = directory if directory is not None else saved_dir
-    effective_dir = _bound_text(
-        directory or saved_dir or client.default_directory, TASK_DIRECTORY_MAX_CHARS
-    )
+    effective_dir = directory or saved_dir or client.default_directory
     if normalized == "abort":
         await client.abort_session(taskID, query_dir)
         return {
@@ -1303,34 +1413,36 @@ async def worker_cleanup(
             "directory": effective_dir,
             "cleanup_warning": None,
         }
-    try:
-        await client.abort_session(taskID, query_dir)
-    except Exception:  # noqa: BLE001 - best-effort abort; outcome reported via aborted flag
+    lock = _get_task_lock()
+    async with lock:
+        try:
+            await client.abort_session(taskID, query_dir)
+        except Exception:  # noqa: BLE001 - best-effort abort; outcome via aborted flag
+            await client.delete_session(taskID, query_dir)
+            _remove_task_record(taskID)
+            return {
+                "taskID": taskID,
+                "sessionID": taskID,
+                "action": "delete",
+                "aborted": False,
+                "deleted": True,
+                "directory": effective_dir,
+                "cleanup_warning": _bound_text(
+                    "pre-delete abort failed; session deleted",
+                    WORKER_CLEANUP_WARNING_MAX_CHARS,
+                ),
+            }
         await client.delete_session(taskID, query_dir)
         _remove_task_record(taskID)
         return {
             "taskID": taskID,
             "sessionID": taskID,
             "action": "delete",
-            "aborted": False,
+            "aborted": True,
             "deleted": True,
             "directory": effective_dir,
-            "cleanup_warning": _bound_text(
-                "pre-delete abort failed; session deleted",
-                WORKER_CLEANUP_WARNING_MAX_CHARS,
-            ),
+            "cleanup_warning": None,
         }
-    await client.delete_session(taskID, query_dir)
-    _remove_task_record(taskID)
-    return {
-        "taskID": taskID,
-        "sessionID": taskID,
-        "action": "delete",
-        "aborted": True,
-        "deleted": True,
-        "directory": effective_dir,
-        "cleanup_warning": None,
-    }
 
 
 def _truncate(text: str, cap: int) -> str:

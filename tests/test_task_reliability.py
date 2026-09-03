@@ -239,10 +239,10 @@ def test_cleanup_delete_removes_record_only_after_success(
 
 
 def test_record_bounds_and_directory_bound(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Registry caps record count and bounds long directory strings."""
+    """Registry caps record count; stored directories are kept exactly."""
     _state_file(monkeypatch, tmp_path)
     monkeypatch.setattr(server, "TASK_MAX_RECORDS", 3)
-    fake = _patch(monkeypatch)
+    _patch(monkeypatch)
     ids: list[str] = []
     for i in range(5):
         result = asyncio.run(server.worker_run(f"msg-{i}", directory="/tmp/w"))
@@ -252,13 +252,19 @@ def test_record_bounds_and_directory_bound(monkeypatch: pytest.MonkeyPatch, tmp_
     assert ids[-1] in tasks
     assert ids[0] not in tasks
 
-    long_dir = "/tmp/" + "d" * 2000
-    long_result = asyncio.run(server.worker_run("bounded", directory=long_dir))
-    assert len(long_result["directory"]) <= server.TASK_DIRECTORY_MAX_CHARS
-    fake.status_map = {long_result["taskID"]: {"type": "busy"}}
-    fake.latest = {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
-    status = asyncio.run(server.worker_status(long_result["taskID"]))
-    assert len(status["directory"]) <= server.TASK_DIRECTORY_MAX_CHARS
+
+def test_long_directory_rejected_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Over-long directories fail before any OpenCode call, never truncated."""
+    _state_file(monkeypatch, tmp_path)
+    fake = _patch(monkeypatch)
+    long_dir = "/tmp/" + "d" * server.TASK_DIRECTORY_MAX_CHARS
+    assert len(long_dir) > server.TASK_DIRECTORY_MAX_CHARS
+    with pytest.raises(ValueError, match="at most"):
+        asyncio.run(server.worker_run("hi", directory=long_dir, requestID="req-long"))
+    assert fake.created == []
+    assert fake.prompted == []
 
 
 def test_request_id_validation_before_side_effects(
@@ -285,3 +291,115 @@ def test_legacy_omitted_request_id_still_records(
     assert result["requestID"] is None
     assert result["taskID"] in json.loads(path.read_text())["tasks"]
     assert len(fake.created) == 1
+
+
+def test_equivalent_directory_spelling_deduplicates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Trailing-separator retries hash identically and do not conflict."""
+    _state_file(monkeypatch, tmp_path)
+    fake = _patch(monkeypatch)
+    first = asyncio.run(server.worker_run("do X", directory="/tmp/w", requestID="req-eq"))
+    second = asyncio.run(server.worker_run("do X", directory="/tmp/w/", requestID="req-eq"))
+    assert second["deduplicated"] is True
+    assert second["taskID"] == first["taskID"]
+    assert len(fake.created) == 1
+
+
+@pytest.mark.parametrize(
+    "bad_content",
+    [
+        "not json{{{",
+        "[]",
+        "{}",
+        '{"tasks": []}',
+        '{"tasks": {"ses_1": "not-a-record"}}',
+    ],
+)
+def test_corrupt_registry_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bad_content: str
+) -> None:
+    """Corrupt or mis-shaped registries raise before any OpenCode call."""
+    path = _state_file(monkeypatch, tmp_path)
+    fake = _patch(monkeypatch)
+    path.write_text(bad_content)
+    secret = "secret-prompt-should-never-leak-abc123"
+    with pytest.raises(RuntimeError, match="task registry") as exc_info:
+        asyncio.run(server.worker_run(secret, directory="/tmp/w", requestID="req-x"))
+    assert fake.created == []
+    assert fake.prompted == []
+    assert secret not in str(exc_info.value)
+
+
+def test_save_failure_cleans_up_session_and_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed atomic save deletes the new session and never claims success."""
+    _state_file(monkeypatch, tmp_path)
+    fake = _patch(monkeypatch)
+    secret = "save-failure-secret-prompt-xyz789"
+
+    def _failing_save(tasks: dict[str, Any]) -> None:
+        raise RuntimeError("task registry is unwritable")
+
+    monkeypatch.setattr(server, "_save_task_state", _failing_save)
+    with pytest.raises(RuntimeError, match="unwritable") as exc_info:
+        asyncio.run(server.worker_run(secret, directory="/tmp/w", requestID="req-save"))
+    assert fake.deleted != []
+    assert secret not in str(exc_info.value)
+
+
+def test_concurrent_same_request_id_creates_one_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Concurrent retries with one requestID create a single session."""
+    _state_file(monkeypatch, tmp_path)
+
+    class _SlowClient(_FakeTaskClient):
+        async def create_session(self, title: Any, directory: Any) -> dict[str, Any]:
+            await asyncio.sleep(0.05)
+            return await super().create_session(title, directory)
+
+    fake = _SlowClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    async def run() -> list[dict[str, Any]]:
+        return await asyncio.gather(
+            server.worker_run("do X", directory="/tmp/w", requestID="req-race"),
+            server.worker_run("do X", directory="/tmp/w", requestID="req-race"),
+        )
+
+    first, second = asyncio.run(run())
+    assert len(fake.created) == 1
+    assert first["taskID"] == second["taskID"]
+    assert sorted([first["deduplicated"], second["deduplicated"]]) == [False, True]
+
+
+def test_concurrent_distinct_tasks_keep_all_records(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Concurrent distinct tasks do not clobber each other's records."""
+    path = _state_file(monkeypatch, tmp_path)
+
+    class _SlowClient(_FakeTaskClient):
+        async def create_session(self, title: Any, directory: Any) -> dict[str, Any]:
+            await asyncio.sleep(0.02)
+            return await super().create_session(title, directory)
+
+    fake = _SlowClient()
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+
+    async def run() -> list[dict[str, Any]]:
+        return await asyncio.gather(
+            *(
+                server.worker_run(f"msg-{i}", directory="/tmp/w", requestID=f"req-{i}")
+                for i in range(5)
+            )
+        )
+
+    results = asyncio.run(run())
+    assert len(fake.created) == 5
+    assert len({r["taskID"] for r in results}) == 5
+    stored = json.loads(path.read_text())["tasks"]
+    for result in results:
+        assert result["taskID"] in stored
