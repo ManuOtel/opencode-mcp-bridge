@@ -1,7 +1,7 @@
 # opencode-mcp-bridge
 
-MCP bridge for a self-hosted [`opencode`](https://opencode.ai) instance.
-It exposes opencode sessions, models, diffs, and server shell access as MCP
+MCP bridge for a self-hosted [`OpenCode`](https://opencode.ai) instance.
+It exposes OpenCode sessions, models, diffs, and server shell access as MCP
 tools over Streamable HTTP, so any MCP-compatible harness can drive it:
 ChatGPT (developer connectors), Claude Code, Codex, MCP Inspector, and more.
 
@@ -14,14 +14,15 @@ task, poll it, verify the diff, then clean up.
 1. Pick a model: `worker_catalog` (defaults to free + connected only).
 2. Launch: `worker_run` with `message`, `directory`, `title`. Save `taskID` and `directory`.
 3. Poll: `worker_status` with the same `taskID` and `directory` until `idle`.
-4. Verify: read `get_diff`, run tests/lint, confirm acceptance criteria.
-5. Clean up: `delete_session` / `worker_cleanup` when done.
+4. Verify: call `worker_verify`, then inspect the exact diff and run tests/lint
+   with the host's own tools; confirm acceptance criteria.
+5. Clean up: `worker_cleanup` when done.
 
 ```text
 worker_catalog()
 worker_run(message="Implement X in /path/to/repo", directory="/path/to/repo", title="feat-x")
 worker_status(taskID="<taskID>", directory="/path/to/repo")  # repeat until idle
-get_diff(sessionID="<taskID>", directory="/path/to/repo")
+worker_verify(taskID="<taskID>", directory="/path/to/repo")
 ```
 
 Status and messages are directory-scoped: always pass the `directory` returned
@@ -72,7 +73,7 @@ Primary worker tools:
 | `worker_status` | Poll state (`running`/`idle`/`error`/`unknown`) plus latest assistant text only, with truncation counts. |
 | `worker_catalog` | List models, free + connected only by default, with bridge defaults. |
 | `worker_verify` | Re-check a finished worker (state + evidence), read-only. Part of the 0.2.0 worker API; lands via the companion branch if absent here. |
-| `worker_cleanup` | Delete a worker session and its data. Prompts before running. Part of the 0.2.0 worker API; lands via the companion branch if absent here (use `delete_session` meanwhile). |
+| `worker_cleanup` | Abort (`action=abort`) or delete (`action=delete`) a worker session. Prompts before running. Part of the 0.2.0 worker API; lands via the companion branch if absent here (use `abort_session` / `delete_session` in full profile meanwhile). |
 
 Session and utility tools:
 
@@ -100,6 +101,8 @@ Session and utility tools:
 - `worker_run` takes the same model options and defaults to the configured free model.
   `worker_catalog` filters (`free_only`, `connected_only` default true, `limit` default
   20, cap 100).
+- `abort_session`, `delete_session`, and `get_diff` are full-profile legacy
+  equivalents of `worker_cleanup` and `worker_verify`. Prefer the worker tools.
 
 ## Free-model policy
 
@@ -123,25 +126,25 @@ Session and utility tools:
 ## Local run and configuration
 
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), plus a running
-`opencode serve` or `opencode web` (see [opencode server docs](https://opencode.ai/docs/server/)).
+`opencode serve` or `opencode web` (see [OpenCode server docs](https://opencode.ai/docs/server/)).
 
 ```bash
 git clone https://github.com/ManuOtel/opencode-mcp-bridge.git
 cd opencode-mcp-bridge
 uv sync
 cp .env.example .env
-# edit .env: opencode credentials + a fresh MCP_BEARER_TOKEN
+# edit .env: OpenCode credentials + a fresh MCP_BEARER_TOKEN
 uv run python -m opencode_mcp_bridge.server
 ```
 
-Check it: `curl http://127.0.0.1:8087/health` should report opencode healthy.
+Check it: `curl http://127.0.0.1:8087/health` should report OpenCode healthy.
 `POST /mcp` without a Bearer token must return 401.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OPENCODE_BASE_URL` | `http://127.0.0.1:4096` | Opencode server URL. |
-| `OPENCODE_SERVER_USERNAME` | `opencode` | Basic auth user for opencode. |
-| `OPENCODE_SERVER_PASSWORD` | (required) | Basic auth password of your opencode server. |
+| `OPENCODE_BASE_URL` | `http://127.0.0.1:4096` | OpenCode server URL. |
+| `OPENCODE_SERVER_USERNAME` | `opencode` | Basic auth user for OpenCode. |
+| `OPENCODE_SERVER_PASSWORD` | (required) | Basic auth password of your OpenCode server. |
 | `MCP_BEARER_TOKEN` | (required) | Static token clients send as `Authorization: Bearer <token>`. |
 | `MCP_HOST` | `127.0.0.1` | Bridge listen address. Use a host IP reachable from your reverse proxy when proxying from Docker. |
 | `MCP_PORT` | `8087` | Bridge listen port. |

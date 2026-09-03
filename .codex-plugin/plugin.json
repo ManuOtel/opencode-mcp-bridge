@@ -1,7 +1,7 @@
 {
   "name": "opencode-worker",
   "version": "0.2.0",
-  "description": "Drive a self-hosted opencode instance as async background workers over MCP.",
+  "description": "Drive a self-hosted OpenCode instance as async background workers over MCP.",
   "author": {
     "name": "ManuOtel",
     "url": "https://github.com/ManuOtel"
@@ -13,17 +13,17 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "Opencode Worker",
-    "shortDescription": "Run opencode as async background workers",
+    "displayName": "OpenCode Worker",
+    "shortDescription": "Run OpenCode as async background workers",
     "longDescription": "Scope worker tasks, poll status, verify diffs, recover stuck tasks, and follow the git worktree protocol.",
     "developerName": "ManuOtel",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
     "websiteURL": "https://github.com/ManuOtel/opencode-mcp-bridge",
     "defaultPrompt": [
-      "List free opencode worker models I can use.",
-      "Start an opencode worker to implement my task.",
-      "Check my opencode worker status and verify its diff."
+      "List free OpenCode worker models I can use.",
+      "Start an OpenCode worker to implement my task.",
+      "Check my OpenCode worker status and verify its diff."
     ]
   }
 }

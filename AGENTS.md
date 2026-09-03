@@ -7,13 +7,11 @@ These rules bind every worker (human or agent) in this repo. They align with the
 
 ## Ownership boundaries
 
-- This checkout owns plugin packaging (`.codex-plugin/`, `.mcp.json`), `skills/`, docs
-  (`README.md`, `CHANGELOG.md`, `AGENTS.md`), CI (`.github/workflows/`), and release
-  metadata (`pyproject.toml`, `uv.lock`).
-- Do NOT edit `src/opencode_mcp_bridge/server.py`, `src/opencode_mcp_bridge/opencode_client.py`,
-  `src/opencode_mcp_bridge/config.py`, `src/opencode_mcp_bridge/__init__.py`, or anything under
-  `tests/`. Another worktree owns the Python server/client/tests. Cross-boundary fixes go through
-  the coordinator, never direct edits.
+- The coordinator assigns explicit per-task ownership boundaries.
+  Workers edit only assigned paths.
+- Concurrent workers use separate worktrees; never share a checkout.
+- If scope must expand, stop and report to the coordinator.
+  Never widen scope unilaterally.
 
 ## Edit discipline
 
@@ -39,7 +37,7 @@ git diff --check
 ```
 
 - `ruff format` in write mode touches Python files: do NOT run it here. Read-only
-  `--check` only. If formatting fails, report it; the owning worktree fixes it.
+  `--check` only. If formatting fails, report it; the coordinator routes the fix.
 - Validate metadata: `python3 -m json.tool` for `.codex-plugin/plugin.json`
   and `.mcp.json`; skill frontmatter must be valid YAML with `name` + `description`.
 

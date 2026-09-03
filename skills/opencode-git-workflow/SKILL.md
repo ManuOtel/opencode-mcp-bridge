@@ -1,9 +1,9 @@
 ---
 name: opencode-git-workflow
-description: Branch, worktree, commit, merge, and PR protocol for opencode worker tasks with conflict and authorization rules.
+description: Branch, worktree, commit, merge, and PR protocol for OpenCode worker tasks with conflict and authorization rules.
 ---
 
-# Opencode Git Workflow
+# OpenCode Git Workflow
 
 Opinionated protocol for worker code changes. Coordinator owns integration.
 

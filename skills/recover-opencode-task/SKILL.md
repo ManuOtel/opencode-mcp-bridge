@@ -1,9 +1,9 @@
 ---
 name: recover-opencode-task
-description: Diagnose and recover unknown, error, or stuck opencode worker tasks safely without duplicate side effects.
+description: Diagnose and recover unknown, error, or stuck OpenCode worker tasks safely without duplicate side effects.
 ---
 
-# Recover Opencode Task
+# Recover OpenCode Task
 
 Use when `worker_status` returns `error` or `unknown`, output stalls, or the directory looks wrong.
 
@@ -17,7 +17,10 @@ Use when `worker_status` returns `error` or `unknown`, output stalls, or the dir
 
 - Directory mismatch: fix the directory, do not launch a second worker for the same task.
 - Retry: fix the cause, then `worker_run` again once. Never fire parallel retries of the same task; duplicates cause duplicate side effects.
-- Abort/delete: use `abort_session` for a live stuck session, `delete_session` or `worker_cleanup` only when the task is abandoned. Cleanup deletes session data and cannot be undone.
+- Abort/delete: use `worker_cleanup(action=abort)` for a live stuck session and
+  `worker_cleanup(action=delete)` only when the task is abandoned. Cleanup deletes
+  session data and cannot be undone. `abort_session` / `delete_session` are legacy
+  equivalents for the full profile only.
 
 ## After recovery
 

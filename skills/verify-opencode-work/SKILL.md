@@ -1,23 +1,24 @@
 ---
 name: verify-opencode-work
-description: Independently verify a finished opencode worker task via diffs, tests, and evidence before accepting it.
+description: Independently verify a finished OpenCode worker task via diffs, tests, and evidence before accepting it.
 ---
 
-# Verify Opencode Work
+# Verify OpenCode Work
 
 Use when a worker reports `idle`. Never trust only the worker summary.
 
-## Inspect, do not assume
+## Verify in worker profile
 
-- Fetch the diff yourself (`get_diff` with the worker `taskID`, optional `messageID`, and the worker `directory`).
-- Read the changed files in the repo. Check scope: only intended files touched, no secrets, no stray artifacts.
-- Run proportionate checks: at minimum the repo's fast tests/lint for the touched area; full suite before merge. See `AGENTS.md` for commands.
+- Call `worker_verify` first: it re-checks state and evidence without side effects.
+- Then inspect the exact diff yourself with the boss host's own filesystem and
+  terminal tools (read the changed files, `git diff`). Check scope: only intended
+  files touched, no secrets, no stray artifacts.
+- Run proportionate checks with the host's own tools: at minimum the repo's fast
+  tests/lint for the touched area; full suite before merge. See `AGENTS.md` for commands.
 - Confirm acceptance criteria from `delegate-to-opencode` one by one. Missing criteria means the task is not done.
-
-## Use worker_verify when available
-
-- `worker_verify` is a read-only helper: it re-checks state and evidence without side effects. It never replaces reading the diff and running checks.
 - Treat `error` state or an error flag in the latest output as failure even if the text sounds confident.
+- `get_diff` (with the worker `taskID`, optional `messageID`, and `directory`) is a
+  full-profile legacy option only. It never replaces reading the diff and running checks.
 
 ## Report
 
