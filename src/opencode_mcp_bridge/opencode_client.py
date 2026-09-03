@@ -9,6 +9,7 @@ Opencode endpoint reference: https://opencode.ai/docs/server/
 
 from __future__ import annotations
 
+import os
 from typing import Any
 from urllib.parse import quote
 
@@ -75,16 +76,17 @@ class OpencodeClient:
         base_url: str,
         username: str,
         password: str,
-        default_directory: str = "/home/manuotel",
+        default_directory: str | None = None,
         timeout_s: float = 600.0,
     ) -> None:
         """Create a client.
 
         Args:
-            base_url: Opencode server URL, e.g. http://10.0.1.1:4096.
+            base_url: Opencode server URL, e.g. http://127.0.0.1:4096.
             username: Basic auth username.
             password: Basic auth password.
             default_directory: Directory used when callers omit it.
+                Defaults to the runtime user's home directory.
             timeout_s: HTTP timeout; prompts can take minutes.
         """
         self._client = httpx.AsyncClient(
@@ -92,7 +94,7 @@ class OpencodeClient:
             auth=(username, password),
             timeout=httpx.Timeout(timeout_s),
         )
-        self.default_directory = default_directory
+        self.default_directory = default_directory or os.path.expanduser("~")
 
     async def close(self) -> None:
         """Close the underlying HTTP connection pool."""
@@ -373,7 +375,7 @@ class OpencodeClient:
 
     @staticmethod
     def _simplify_session(session: dict[str, Any]) -> dict[str, Any]:
-        """Reduce a session object to the fields ChatGPT needs.
+        """Reduce a session object to the fields MCP clients need.
 
         Args:
             session: Raw session dict.

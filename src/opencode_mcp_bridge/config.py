@@ -84,13 +84,13 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
     except ValueError as exc:
         raise RuntimeError(f"Invalid numeric setting: {exc}") from exc
     return Settings(
-        opencode_base_url=os.environ.get("OPENCODE_BASE_URL", "http://10.0.1.1:4096").rstrip("/"),
+        opencode_base_url=os.environ.get("OPENCODE_BASE_URL", "http://127.0.0.1:4096").rstrip("/"),
         opencode_username=os.environ.get("OPENCODE_SERVER_USERNAME", "opencode"),
         opencode_password=_required("OPENCODE_SERVER_PASSWORD"),
         mcp_bearer_token=_required("MCP_BEARER_TOKEN"),
-        mcp_host=os.environ.get("MCP_HOST", "0.0.0.0"),
+        mcp_host=os.environ.get("MCP_HOST", "127.0.0.1"),
         mcp_port=mcp_port,
-        default_directory=os.environ.get("DEFAULT_DIRECTORY", "/home/manuotel"),
+        default_directory=os.environ.get("DEFAULT_DIRECTORY", os.path.expanduser("~")),
         exec_timeout_s=exec_timeout,
         exec_max_output_chars=exec_max_chars,
     )

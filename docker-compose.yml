@@ -1,5 +1,5 @@
-# Standalone compose. In Coolify deploy from this repo instead and set the
-# same env vars in the Coolify UI; Traefik routing below is a hint.
+# Example compose. Replace mcp.example.com with your domain and fill .env.
+# Note: in Docker, exec_run runs inside this container, not on the host.
 services:
   bridge:
     build: .
@@ -24,6 +24,6 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.opencode-mcp-http.entrypoints=http"
-      - "traefik.http.routers.opencode-mcp-http.rule=Host(`opencode-mcp.manuotel.com`)"
+      - "traefik.http.routers.opencode-mcp-http.rule=Host(`mcp.example.com`)"
       - "traefik.http.routers.opencode-mcp-http.priority=40"
       - "traefik.http.services.opencode-mcp.loadbalancer.server.port=8087"
