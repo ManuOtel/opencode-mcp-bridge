@@ -1,12 +1,26 @@
 # Host-mode systemd unit. The bridge runs on the host, so exec_run is a
 # real host shell and opencode on localhost is directly reachable.
+# exec_run stays explicit opt-in: it fails closed unless ENABLE_EXEC_RUN=true
+# in the env file. Running as the non-root opencode-mcp user reduces its
+# blast radius but does not sandbox a shell; enable it only where a shell
+# is intended.
 # Install (adjust paths and the uv binary location to your machine):
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin opencode-mcp
 #   sudo mkdir -p /opt/opencode-mcp-bridge /etc/opencode-mcp-bridge
 #   sudo git clone <repo> /opt/opencode-mcp-bridge
 #   cd /opt/opencode-mcp-bridge && uv sync --frozen --no-dev
-#   sudo install -m 600 /path/to/env /etc/opencode-mcp-bridge/env
+#   sudo chown -R root:root /opt/opencode-mcp-bridge
+#   sudo install -m 640 -o root -g opencode-mcp /path/to/env /etc/opencode-mcp-bridge/env
 #   sudo cp deploy/opencode-mcp-bridge.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now opencode-mcp-bridge
+# State directory /var/lib/opencode-mcp-bridge is created automatically via
+# StateDirectory= below, owned opencode-mcp:opencode-mcp mode 0750. To
+# pre-create it manually:
+#   sudo mkdir -p /var/lib/opencode-mcp-bridge
+#   sudo chown opencode-mcp:opencode-mcp /var/lib/opencode-mcp-bridge
+#   sudo chmod 0750 /var/lib/opencode-mcp-bridge
+# If TASK_STATE_PATH is overridden, point ReadWritePaths= at that directory
+# instead and chown it to opencode-mcp. Do not grant broad write access.
 [Unit]
 Description=OpenCode MCP Bridge
 After=network-online.target
@@ -14,16 +28,34 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=opencode-mcp
+Group=opencode-mcp
+UMask=0027
 WorkingDirectory=/opt/opencode-mcp-bridge
 EnvironmentFile=/etc/opencode-mcp-bridge/env
 Environment=PATH=/opt/opencode-mcp-bridge/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/opt/opencode-mcp-bridge/.venv/bin/python -m opencode_mcp_bridge.server
 Restart=always
 RestartSec=5
-NoNewPrivileges=false
+NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RemoveIPC=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/opencode-mcp-bridge
+StateDirectory=opencode-mcp-bridge
+StateDirectoryMode=0750
 
 [Install]
 WantedBy=multi-user.target
