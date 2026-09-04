@@ -28,6 +28,7 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "OPENCODE_SERVER_USERNAME",
         "OPENCODE_SERVER_PASSWORD",
         "MCP_BEARER_TOKEN",
+        "MCP_BEARER_TOKEN_SECONDARY",
         "MCP_HOST",
         "MCP_PORT",
         "DEFAULT_DIRECTORY",
