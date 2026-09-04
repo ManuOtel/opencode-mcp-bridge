@@ -18,6 +18,7 @@ import hmac
 import json
 import os
 import tempfile
+import time
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from opencode_mcp_bridge import observability
 from opencode_mcp_bridge.config import Settings, _realpath_str, load_settings
 from opencode_mcp_bridge.config import _is_within_root as _within_root
 from opencode_mcp_bridge.opencode_client import OpencodeClient, OpencodeError
@@ -1061,98 +1063,137 @@ async def worker_run(
         providerID, modelID, directory, title, agent, requestID, and
         deduplicated flag.
     """
-    normalized_request = _normalize_request_id(requestID)
-    authorized_dir = _authorize_optional_directory(directory)
-    client = get_client()
-    resolved_provider, resolved_model = client.resolve_model(providerID, modelID)
-    fingerprint = _fingerprint_task(
-        message, directory, title, agent, resolved_provider, resolved_model
+    _obs_start = time.perf_counter()
+    _obs_request = observability.redact_request_id(requestID)
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_run",
+        outcome=observability.OUTCOME_STARTED,
+        request_id=_obs_request,
     )
-    lock = _get_task_lock()
-    async with lock:
-        stored_tasks = _load_task_state()
-        if normalized_request is not None:
-            existing = _find_task_by_request(stored_tasks, normalized_request)
-            if existing is not None:
-                if existing.get("fingerprint") != fingerprint:
-                    raise ValueError("requestID was already used with different inputs")
-                existing_dir = existing.get("directory")
-                if isinstance(existing_dir, str) and existing_dir.strip():
-                    _authorize_directory(existing_dir)
-                task_id = existing.get("taskID")
-                alive = (
-                    await _recorded_session_alive(client, task_id, existing.get("directory"))
-                    if isinstance(task_id, str) and task_id
-                    else False
-                )
-                if alive:
-                    return {
-                        "taskID": task_id,
-                        "sessionID": task_id,
-                        "state": "running",
-                        "providerID": existing.get("providerID", resolved_provider),
-                        "modelID": existing.get("modelID", resolved_model),
-                        "directory": existing.get("directory", ""),
-                        "title": existing.get("title"),
-                        "agent": existing.get("agent"),
-                        "requestID": normalized_request,
-                        "deduplicated": True,
-                    }
-                if isinstance(task_id, str):
-                    stored_tasks.pop(task_id, None)
-        session = await client.create_session(title, authorized_dir)
-        session_id = session.get("id") if isinstance(session, dict) else None
-        if not session_id:
-            raise ValueError("opencode session response contained no id")
-        effective_dir = session.get("directory") if isinstance(session, dict) else None
-        effective_title = session.get("title") if isinstance(session, dict) else None
-        if directory is None:
-            resolved_raw = effective_dir or authorized_dir
-        else:
-            resolved_raw = effective_dir or authorized_dir
-        resolved_dir = _authorize_directory(resolved_raw)
-        record = _build_task_record(
-            session_id,
-            normalized_request,
-            fingerprint,
-            resolved_dir,
-            effective_title if effective_title is not None else title,
-            agent,
-            resolved_provider,
-            resolved_model,
+    try:
+        normalized_request = _normalize_request_id(requestID)
+        authorized_dir = _authorize_optional_directory(directory)
+        client = get_client()
+        resolved_provider, resolved_model = client.resolve_model(providerID, modelID)
+        fingerprint = _fingerprint_task(
+            message, directory, title, agent, resolved_provider, resolved_model
         )
-        stored_tasks[session_id] = record
-        try:
-            _save_task_state(stored_tasks)
-        except Exception:
-            with suppress(Exception):
-                await client.delete_session(session_id, authorized_dir)
-            raise
-        try:
-            await client.prompt_async(
-                session_id, message, providerID, modelID, agent, authorized_dir
+        lock = _get_task_lock()
+        async with lock:
+            stored_tasks = _load_task_state()
+            if normalized_request is not None:
+                existing = _find_task_by_request(stored_tasks, normalized_request)
+                if existing is not None:
+                    if existing.get("fingerprint") != fingerprint:
+                        raise ValueError("requestID was already used with different inputs")
+                    existing_dir = existing.get("directory")
+                    if isinstance(existing_dir, str) and existing_dir.strip():
+                        _authorize_directory(existing_dir)
+                    task_id = existing.get("taskID")
+                    alive = (
+                        await _recorded_session_alive(client, task_id, existing.get("directory"))
+                        if isinstance(task_id, str) and task_id
+                        else False
+                    )
+                    if alive:
+                        _obs_result = {
+                            "taskID": task_id,
+                            "sessionID": task_id,
+                            "state": "running",
+                            "providerID": existing.get("providerID", resolved_provider),
+                            "modelID": existing.get("modelID", resolved_model),
+                            "directory": existing.get("directory", ""),
+                            "title": existing.get("title"),
+                            "agent": existing.get("agent"),
+                            "requestID": normalized_request,
+                            "deduplicated": True,
+                        }
+                        observability.emit(
+                            event=observability.EVENT_WORKER,
+                            tool="worker_run",
+                            outcome=observability.OUTCOME_SUCCEEDED,
+                            duration_ms=observability.duration_ms_since(_obs_start),
+                            request_id=_obs_request,
+                            task_id=observability.safe_task_id(task_id),
+                        )
+                        return _obs_result
+                    if isinstance(task_id, str):
+                        stored_tasks.pop(task_id, None)
+            session = await client.create_session(title, authorized_dir)
+            session_id = session.get("id") if isinstance(session, dict) else None
+            if not session_id:
+                raise ValueError("opencode session response contained no id")
+            effective_dir = session.get("directory") if isinstance(session, dict) else None
+            effective_title = session.get("title") if isinstance(session, dict) else None
+            if directory is None:
+                resolved_raw = effective_dir or authorized_dir
+            else:
+                resolved_raw = effective_dir or authorized_dir
+            resolved_dir = _authorize_directory(resolved_raw)
+            record = _build_task_record(
+                session_id,
+                normalized_request,
+                fingerprint,
+                resolved_dir,
+                effective_title if effective_title is not None else title,
+                agent,
+                resolved_provider,
+                resolved_model,
             )
-        except Exception:
-            with suppress(Exception):
-                tasks = _load_task_state()
-                if session_id in tasks:
-                    del tasks[session_id]
-                    _save_task_state(tasks)
-            with suppress(Exception):
-                await client.delete_session(session_id, authorized_dir)
-            raise
-        return {
-            "taskID": session_id,
-            "sessionID": session_id,
-            "state": "running",
-            "providerID": resolved_provider,
-            "modelID": resolved_model,
-            "directory": resolved_dir,
-            "title": effective_title if effective_title is not None else title,
-            "agent": agent,
-            "requestID": normalized_request,
-            "deduplicated": False,
-        }
+            stored_tasks[session_id] = record
+            try:
+                _save_task_state(stored_tasks)
+            except Exception:
+                with suppress(Exception):
+                    await client.delete_session(session_id, authorized_dir)
+                raise
+            try:
+                await client.prompt_async(
+                    session_id, message, providerID, modelID, agent, authorized_dir
+                )
+            except Exception:
+                with suppress(Exception):
+                    tasks = _load_task_state()
+                    if session_id in tasks:
+                        del tasks[session_id]
+                        _save_task_state(tasks)
+                with suppress(Exception):
+                    await client.delete_session(session_id, authorized_dir)
+                raise
+            _obs_result = {
+                "taskID": session_id,
+                "sessionID": session_id,
+                "state": "running",
+                "providerID": resolved_provider,
+                "modelID": resolved_model,
+                "directory": resolved_dir,
+                "title": effective_title if effective_title is not None else title,
+                "agent": agent,
+                "requestID": normalized_request,
+                "deduplicated": False,
+            }
+            observability.emit(
+                event=observability.EVENT_WORKER,
+                tool="worker_run",
+                outcome=observability.OUTCOME_SUCCEEDED,
+                duration_ms=observability.duration_ms_since(_obs_start),
+                request_id=_obs_request,
+                task_id=observability.safe_task_id(session_id),
+            )
+            return _obs_result
+    except Exception as _obs_exc:
+        _obs_class, _obs_status = observability.classify_error(_obs_exc)
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_run",
+            outcome=observability.outcome_for(_obs_exc),
+            duration_ms=observability.duration_ms_since(_obs_start),
+            request_id=_obs_request,
+            error_class=_obs_class,
+            status_code=_obs_status,
+        )
+        raise
 
 
 @mcp.tool(
@@ -1200,64 +1241,93 @@ async def worker_status(
         assistant error infers idle; absent status with no assistant stays
         unknown.
     """
-    client = get_client()
-    saved: dict[str, Any] | None = None
-    if directory is None:
-        saved = _load_task_state().get(taskID)
-    if directory is not None:
-        authorized = _authorize_directory(directory)
-        effective_query = authorized
-        effective_dir = authorized
-    elif saved and saved.get("directory"):
-        saved_dir = saved.get("directory")
-        if not isinstance(saved_dir, str) or not saved_dir.strip():
+    _obs_start = time.perf_counter()
+    _obs_task = observability.safe_task_id(taskID)
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_status",
+        outcome=observability.OUTCOME_STARTED,
+        task_id=_obs_task,
+    )
+    try:
+        client = get_client()
+        saved: dict[str, Any] | None = None
+        if directory is None:
+            saved = _load_task_state().get(taskID)
+        if directory is not None:
+            authorized = _authorize_directory(directory)
+            effective_query = authorized
+            effective_dir = authorized
+        elif saved and saved.get("directory"):
+            saved_dir = saved.get("directory")
+            if not isinstance(saved_dir, str) or not saved_dir.strip():
+                effective_dir = _authorize_optional_directory(None)
+            else:
+                effective_dir = _authorize_directory(saved_dir)
+            effective_query = effective_dir
+        else:
             effective_dir = _authorize_optional_directory(None)
-        else:
-            effective_dir = _authorize_directory(saved_dir)
-        effective_query = effective_dir
-    else:
-        effective_dir = _authorize_optional_directory(None)
-        effective_query = effective_dir
-    cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
-    statuses = await client.get_session_status(effective_query)
-    raw = statuses.get(taskID) if isinstance(statuses, dict) else None
-    status = raw.get("type") if isinstance(raw, dict) else raw
-    state = _map_worker_state(raw)
-    message_id: str | None = None
-    output: str | None = None
-    output_chars = 0
-    total_chars = 0
-    truncated_chars = 0
-    truncated = False
-    if include_output:
-        latest = await client.get_latest_assistant(taskID, effective_query, max_chars=cap + 1)
-        message_id = latest.get("messageID")
-        if latest.get("has_error"):
-            state = "error"
-        elif raw is None and message_id is not None:
-            state = "idle"
-        total_chars = int(latest.get("total_chars", 0) or 0)
-        text = latest.get("text", "") or ""
-        if total_chars > cap:
-            output = text[:cap]
-            truncated = True
-            truncated_chars = total_chars - cap
-        else:
-            output = text
-        output_chars = len(output) if output is not None else 0
-    return {
-        "taskID": taskID,
-        "sessionID": taskID,
-        "state": state,
-        "status": status,
-        "messageID": message_id,
-        "output": output,
-        "output_chars": output_chars,
-        "total_chars": total_chars,
-        "truncated_chars": truncated_chars,
-        "truncated": truncated,
-        "directory": effective_dir,
-    }
+            effective_query = effective_dir
+        cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
+        statuses = await client.get_session_status(effective_query)
+        raw = statuses.get(taskID) if isinstance(statuses, dict) else None
+        status = raw.get("type") if isinstance(raw, dict) else raw
+        state = _map_worker_state(raw)
+        message_id: str | None = None
+        output: str | None = None
+        output_chars = 0
+        total_chars = 0
+        truncated_chars = 0
+        truncated = False
+        if include_output:
+            latest = await client.get_latest_assistant(taskID, effective_query, max_chars=cap + 1)
+            message_id = latest.get("messageID")
+            if latest.get("has_error"):
+                state = "error"
+            elif raw is None and message_id is not None:
+                state = "idle"
+            total_chars = int(latest.get("total_chars", 0) or 0)
+            text = latest.get("text", "") or ""
+            if total_chars > cap:
+                output = text[:cap]
+                truncated = True
+                truncated_chars = total_chars - cap
+            else:
+                output = text
+            output_chars = len(output) if output is not None else 0
+        _obs_result = {
+            "taskID": taskID,
+            "sessionID": taskID,
+            "state": state,
+            "status": status,
+            "messageID": message_id,
+            "output": output,
+            "output_chars": output_chars,
+            "total_chars": total_chars,
+            "truncated_chars": truncated_chars,
+            "truncated": truncated,
+            "directory": effective_dir,
+        }
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_status",
+            outcome=observability.OUTCOME_SUCCEEDED,
+            duration_ms=observability.duration_ms_since(_obs_start),
+            task_id=_obs_task,
+        )
+        return _obs_result
+    except Exception as _obs_exc:
+        _obs_class, _obs_status = observability.classify_error(_obs_exc)
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_status",
+            outcome=observability.outcome_for(_obs_exc),
+            duration_ms=observability.duration_ms_since(_obs_start),
+            task_id=_obs_task,
+            error_class=_obs_class,
+            status_code=_obs_status,
+        )
+        raise
 
 
 @mcp.tool(
@@ -1300,70 +1370,95 @@ async def worker_catalog(
     Returns:
         Compact dict with model entries, bridge defaults, and total count.
     """
-    client = get_client()
-    count = max(1, min(limit, WORKER_CATALOG_MAX_LIMIT))
-    data = await client.get_providers_raw()
-    connected = set(data.get("connected", []) or [])
-    needle = query.lower() if query else None
-    models: list[dict[str, Any]] = []
-    for provider in data.get("all", []) or []:
-        if not isinstance(provider, dict):
-            continue
-        provider_id = provider.get("id")
-        provider_name = provider.get("name")
-        is_connected = provider_id in connected
-        if connected_only and not is_connected:
-            continue
-        entries = provider.get("models", {}) or {}
-        if not isinstance(entries, dict):
-            continue
-        for model_key, spec in entries.items():
-            detail = spec if isinstance(spec, dict) else {}
-            model_id = detail.get("id") or model_key
-            name = detail.get("name")
-            cost = detail.get("cost")
-            free = _is_free_model(model_id, name, cost)
-            if free_only and not free:
-                continue
-            if (
-                needle
-                and needle
-                not in f"{provider_id or ''} {provider_name or ''} "
-                f"{model_id or ''} {name or ''}".lower()
-            ):
-                continue
-            entry: dict[str, Any] = {
-                "providerID": provider_id,
-                "modelID": model_id,
-                "name": name,
-                "connected": is_connected,
-                "free": free,
-            }
-            if (
-                isinstance(cost, dict)
-                and cost.get("input") is not None
-                and cost.get("output") is not None
-            ):
-                entry["cost"] = {"input": cost["input"], "output": cost["output"]}
-            models.append(entry)
-    models.sort(
-        key=lambda item: (
-            not (
-                item["providerID"] == client.default_provider_id
-                and item["modelID"] == client.default_model_id
-            ),
-            item["providerID"] or "",
-            item["modelID"] or "",
-        )
+    _obs_start = time.perf_counter()
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_catalog",
+        outcome=observability.OUTCOME_STARTED,
     )
-    return {
-        "models": models[:count],
-        "default": {
-            "providerID": client.default_provider_id,
-            "modelID": client.default_model_id,
-        },
-        "total": len(models),
-    }
+    try:
+        client = get_client()
+        count = max(1, min(limit, WORKER_CATALOG_MAX_LIMIT))
+        data = await client.get_providers_raw()
+        connected = set(data.get("connected", []) or [])
+        needle = query.lower() if query else None
+        models: list[dict[str, Any]] = []
+        for provider in data.get("all", []) or []:
+            if not isinstance(provider, dict):
+                continue
+            provider_id = provider.get("id")
+            provider_name = provider.get("name")
+            is_connected = provider_id in connected
+            if connected_only and not is_connected:
+                continue
+            entries = provider.get("models", {}) or {}
+            if not isinstance(entries, dict):
+                continue
+            for model_key, spec in entries.items():
+                detail = spec if isinstance(spec, dict) else {}
+                model_id = detail.get("id") or model_key
+                name = detail.get("name")
+                cost = detail.get("cost")
+                free = _is_free_model(model_id, name, cost)
+                if free_only and not free:
+                    continue
+                if (
+                    needle
+                    and needle
+                    not in f"{provider_id or ''} {provider_name or ''} "
+                    f"{model_id or ''} {name or ''}".lower()
+                ):
+                    continue
+                entry: dict[str, Any] = {
+                    "providerID": provider_id,
+                    "modelID": model_id,
+                    "name": name,
+                    "connected": is_connected,
+                    "free": free,
+                }
+                if (
+                    isinstance(cost, dict)
+                    and cost.get("input") is not None
+                    and cost.get("output") is not None
+                ):
+                    entry["cost"] = {"input": cost["input"], "output": cost["output"]}
+                models.append(entry)
+        models.sort(
+            key=lambda item: (
+                not (
+                    item["providerID"] == client.default_provider_id
+                    and item["modelID"] == client.default_model_id
+                ),
+                item["providerID"] or "",
+                item["modelID"] or "",
+            )
+        )
+        _obs_result = {
+            "models": models[:count],
+            "default": {
+                "providerID": client.default_provider_id,
+                "modelID": client.default_model_id,
+            },
+            "total": len(models),
+        }
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_catalog",
+            outcome=observability.OUTCOME_SUCCEEDED,
+            duration_ms=observability.duration_ms_since(_obs_start),
+        )
+        return _obs_result
+    except Exception as _obs_exc:
+        _obs_class, _obs_status = observability.classify_error(_obs_exc)
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_catalog",
+            outcome=observability.outcome_for(_obs_exc),
+            duration_ms=observability.duration_ms_since(_obs_start),
+            error_class=_obs_class,
+            status_code=_obs_status,
+        )
+        raise
 
 
 @mcp.tool(
@@ -1484,18 +1579,51 @@ async def worker_verify(
     Raises:
         ValueError: If taskID is empty.
     """
-    if not taskID or not taskID.strip():
-        raise ValueError("taskID must not be empty")
-    status_result = await worker_status(taskID, directory, True, max_output_chars)
-    recovered_dir = status_result.get("directory")
-    if directory is not None:
-        effective_dir = _authorize_directory(directory)
-    elif isinstance(recovered_dir, str) and recovered_dir.strip():
-        effective_dir = _authorize_directory(recovered_dir)
-    else:
-        effective_dir = _authorize_optional_directory(None)
-    verification = await _collect_verification(effective_dir)
-    return {**status_result, "directory": verification["directory"], "verification": verification}
+    _obs_start = time.perf_counter()
+    _obs_task = observability.safe_task_id(taskID)
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_verify",
+        outcome=observability.OUTCOME_STARTED,
+        task_id=_obs_task,
+    )
+    try:
+        if not taskID or not taskID.strip():
+            raise ValueError("taskID must not be empty")
+        status_result = await worker_status(taskID, directory, True, max_output_chars)
+        recovered_dir = status_result.get("directory")
+        if directory is not None:
+            effective_dir = _authorize_directory(directory)
+        elif isinstance(recovered_dir, str) and recovered_dir.strip():
+            effective_dir = _authorize_directory(recovered_dir)
+        else:
+            effective_dir = _authorize_optional_directory(None)
+        verification = await _collect_verification(effective_dir)
+        _obs_result = {
+            **status_result,
+            "directory": verification["directory"],
+            "verification": verification,
+        }
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_verify",
+            outcome=observability.OUTCOME_SUCCEEDED,
+            duration_ms=observability.duration_ms_since(_obs_start),
+            task_id=_obs_task,
+        )
+        return _obs_result
+    except Exception as _obs_exc:
+        _obs_class, _obs_status = observability.classify_error(_obs_exc)
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_verify",
+            outcome=observability.outcome_for(_obs_exc),
+            duration_ms=observability.duration_ms_since(_obs_start),
+            task_id=_obs_task,
+            error_class=_obs_class,
+            status_code=_obs_status,
+        )
+        raise
 
 
 @mcp.tool(
@@ -1539,65 +1667,117 @@ async def worker_cleanup(
     Raises:
         ValueError: If taskID is empty or action is not abort/delete.
     """
-    if not taskID or not taskID.strip():
-        raise ValueError("taskID must not be empty")
-    normalized = (action or "").strip().lower()
-    if normalized not in ("abort", "delete"):
-        raise ValueError("action must be either 'abort' or 'delete'")
-    client = get_client()
-    saved_dir: str | None = None
-    if directory is None:
-        saved_dir = (_load_task_state().get(taskID) or {}).get("directory")
-    if directory is not None:
-        effective_dir = _authorize_directory(directory)
-        query_dir: str | None = effective_dir
-    elif isinstance(saved_dir, str) and saved_dir.strip():
-        effective_dir = _authorize_directory(saved_dir)
-        query_dir = effective_dir
-    else:
-        effective_dir = _authorize_optional_directory(None)
-        query_dir = effective_dir
-    if normalized == "abort":
-        await client.abort_session(taskID, query_dir)
-        return {
-            "taskID": taskID,
-            "sessionID": taskID,
-            "action": "abort",
-            "aborted": True,
-            "deleted": False,
-            "directory": effective_dir,
-            "cleanup_warning": None,
-        }
-    lock = _get_task_lock()
-    async with lock:
-        try:
+    _obs_start = time.perf_counter()
+    _obs_task = observability.safe_task_id(taskID)
+    _obs_action_raw = (action or "").strip().lower()
+    _obs_action = _obs_action_raw if _obs_action_raw in ("abort", "delete") else "invalid"
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_cleanup",
+        outcome=observability.OUTCOME_STARTED,
+        task_id=_obs_task,
+        action=_obs_action,
+    )
+    try:
+        if not taskID or not taskID.strip():
+            raise ValueError("taskID must not be empty")
+        normalized = (action or "").strip().lower()
+        if normalized not in ("abort", "delete"):
+            raise ValueError("action must be either 'abort' or 'delete'")
+        client = get_client()
+        saved_dir: str | None = None
+        if directory is None:
+            saved_dir = (_load_task_state().get(taskID) or {}).get("directory")
+        if directory is not None:
+            effective_dir = _authorize_directory(directory)
+            query_dir: str | None = effective_dir
+        elif isinstance(saved_dir, str) and saved_dir.strip():
+            effective_dir = _authorize_directory(saved_dir)
+            query_dir = effective_dir
+        else:
+            effective_dir = _authorize_optional_directory(None)
+            query_dir = effective_dir
+        if normalized == "abort":
             await client.abort_session(taskID, query_dir)
-        except Exception:  # noqa: BLE001 - best-effort abort; outcome via aborted flag
+            _obs_result = {
+                "taskID": taskID,
+                "sessionID": taskID,
+                "action": "abort",
+                "aborted": True,
+                "deleted": False,
+                "directory": effective_dir,
+                "cleanup_warning": None,
+            }
+            observability.emit(
+                event=observability.EVENT_WORKER,
+                tool="worker_cleanup",
+                outcome=observability.OUTCOME_SUCCEEDED,
+                duration_ms=observability.duration_ms_since(_obs_start),
+                task_id=_obs_task,
+                action="abort",
+            )
+            return _obs_result
+        lock = _get_task_lock()
+        async with lock:
+            try:
+                await client.abort_session(taskID, query_dir)
+            except Exception:  # noqa: BLE001 - best-effort abort; outcome via aborted flag
+                await client.delete_session(taskID, query_dir)
+                _remove_task_record(taskID)
+                _obs_result = {
+                    "taskID": taskID,
+                    "sessionID": taskID,
+                    "action": "delete",
+                    "aborted": False,
+                    "deleted": True,
+                    "directory": effective_dir,
+                    "cleanup_warning": _bound_text(
+                        "pre-delete abort failed; session deleted",
+                        WORKER_CLEANUP_WARNING_MAX_CHARS,
+                    ),
+                }
+                observability.emit(
+                    event=observability.EVENT_WORKER,
+                    tool="worker_cleanup",
+                    outcome=observability.OUTCOME_SUCCEEDED,
+                    duration_ms=observability.duration_ms_since(_obs_start),
+                    task_id=_obs_task,
+                    action="delete",
+                )
+                return _obs_result
             await client.delete_session(taskID, query_dir)
             _remove_task_record(taskID)
-            return {
+            _obs_result = {
                 "taskID": taskID,
                 "sessionID": taskID,
                 "action": "delete",
-                "aborted": False,
+                "aborted": True,
                 "deleted": True,
                 "directory": effective_dir,
-                "cleanup_warning": _bound_text(
-                    "pre-delete abort failed; session deleted",
-                    WORKER_CLEANUP_WARNING_MAX_CHARS,
-                ),
+                "cleanup_warning": None,
             }
-        await client.delete_session(taskID, query_dir)
-        _remove_task_record(taskID)
-        return {
-            "taskID": taskID,
-            "sessionID": taskID,
-            "action": "delete",
-            "aborted": True,
-            "deleted": True,
-            "directory": effective_dir,
-            "cleanup_warning": None,
-        }
+            observability.emit(
+                event=observability.EVENT_WORKER,
+                tool="worker_cleanup",
+                outcome=observability.OUTCOME_SUCCEEDED,
+                duration_ms=observability.duration_ms_since(_obs_start),
+                task_id=_obs_task,
+                action="delete",
+            )
+            return _obs_result
+    except Exception as _obs_exc:
+        _obs_class, _obs_status = observability.classify_error(_obs_exc)
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_cleanup",
+            outcome=observability.outcome_for(_obs_exc),
+            duration_ms=observability.duration_ms_since(_obs_start),
+            task_id=_obs_task,
+            action=_obs_action,
+            error_class=_obs_class,
+            status_code=_obs_status,
+        )
+        raise
 
 
 def _truncate(text: str, cap: int) -> str:
@@ -1653,6 +1833,12 @@ class BearerAuthMiddleware:
         auth = headers.get(b"authorization", b"")
         scheme, _, presented = auth.partition(b" ")
         if scheme.lower() != b"bearer" or not hmac.compare_digest(presented, self._expected):
+            observability.emit(
+                event=observability.EVENT_AUTH,
+                tool=observability.TOOL_AUTH,
+                outcome=observability.OUTCOME_REJECTED,
+                error_class="Unauthorized",
+            )
             response = JSONResponse({"error": "unauthorized"}, status_code=401)
             await response(scope, receive, send)
             return
