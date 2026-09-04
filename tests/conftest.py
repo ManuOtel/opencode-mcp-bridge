@@ -21,12 +21,8 @@ def _isolated_task_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     monkeypatch.setenv("TASK_STATE_PATH", str(state_path))
     monkeypatch.setenv("OPENCODE_SERVER_PASSWORD", os.environ.get("OPENCODE_SERVER_PASSWORD", "pw"))
     monkeypatch.setenv("MCP_BEARER_TOKEN", os.environ.get("MCP_BEARER_TOKEN", "tok"))
-    home = os.path.expanduser("~")
-    monkeypatch.setenv("DEFAULT_DIRECTORY", os.environ.get("DEFAULT_DIRECTORY", "/home/tester"))
-    monkeypatch.setenv(
-        "ALLOWED_DIRECTORIES",
-        os.environ.get("ALLOWED_DIRECTORIES", f"/tmp,/home/tester,{home}"),
-    )
+    monkeypatch.setenv("DEFAULT_DIRECTORY", "/home/tester")
+    monkeypatch.setenv("ALLOWED_DIRECTORIES", "/tmp,/home/tester")
     monkeypatch.setattr(server, "_settings", None)
     monkeypatch.setattr(server, "_client", None)
     return state_path
