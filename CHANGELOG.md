@@ -13,8 +13,11 @@ All notable changes to this project will be documented in this file.
   `worker_run`/`worker_cleanup`, auto-approve for read-only worker tools).
 - Worker playbook skills: `delegate-to-opencode`, `verify-opencode-work`,
   `recover-opencode-task`, `opencode-git-workflow`.
-- Worker API: `worker_run`, `worker_status`, `worker_catalog` (plus `worker_verify` /
-  `worker_cleanup` landing via the companion branch) with free-model defaults and
-  async polling.
+- Claude Code plugin packaging: `plugins/claude-code/.claude-plugin/plugin.json`
+  (`opencode-worker` 0.1.0) with the `coordinate-opencode-worker` skill,
+  exposed via the repo-root marketplace `.claude-plugin/marketplace.json`.
+- Worker API: `worker_run`, `worker_status`, `worker_catalog`, `worker_verify`,
+  and `worker_cleanup` (0.2.0 worker API, all five served on `/worker-mcp`)
+  with free-model defaults and async polling.
 - Repository worker rules (`AGENTS.md`) and CI for Python 3.11/3.12
   (`pytest`, `ruff check`, `ruff format --check`, `git diff --check`).
