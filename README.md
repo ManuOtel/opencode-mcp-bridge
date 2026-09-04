@@ -61,10 +61,10 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
 
 - Codex (Git marketplace, recommended): the repository is the source of truth.
   The root `opencode-worker` plugin is exposed via `.agents/plugins/marketplace.json`
-  (Git-backed root source, `ref` master):
+  (Git-backed root source, `ref` v0.2.0):
 
   ```bash
-  codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref master
+  codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.2.0
   ```
 
   Then install `opencode-worker` from that marketplace. Set

@@ -11,10 +11,10 @@ PLUGIN_MANIFEST = REPO / ".codex-plugin" / "plugin.json"
 DOCS = REPO / "docs" / "client-setup.md"
 README = REPO / "README.md"
 
-ADD_COMMAND = "codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref master"
+ADD_COMMAND = "codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.2.0"
 PLUGIN_NAME = "opencode-worker"
 REPO_URL = "https://github.com/ManuOtel/opencode-mcp-bridge.git"
-REF = "master"
+REF = "v0.2.0"
 
 
 def _marketplace() -> dict:
@@ -37,7 +37,7 @@ def test_marketplace_file_is_valid_json_with_name() -> None:
 
 
 def test_marketplace_exposes_root_plugin_via_git_url_source() -> None:
-    """Root plugin uses a Git-backed root source: source=url, repo URL, ref master."""
+    """Root plugin uses a Git-backed root source: source=url, repo URL, ref v0.2.0."""
     entry = _plugin_entry()
     source = entry["source"]
     assert source["source"] == "url"

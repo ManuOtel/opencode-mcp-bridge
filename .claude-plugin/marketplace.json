@@ -9,7 +9,7 @@
     {
       "name": "opencode-worker",
       "description": "Drive a self-hosted OpenCode instance as async background workers over MCP.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "source": "./plugins/claude-code",
       "author": {
         "name": "ManuOtel",

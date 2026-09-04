@@ -134,6 +134,26 @@ Quote the diff and the command output in your report.
   deployment impact in the pull request (see the pull request template).
 - Confirm that you obeyed the Code of Conduct.
 
+## Releases (coordinator/maintainer only)
+
+Releases are coordinator/maintainer operations.
+Workers prepare the release branch; only the maintainer tags and verifies.
+
+- Tag format is `vMAJOR.MINOR.PATCH` (for example `v0.2.0`).
+  The tag must match `pyproject.toml` and both plugin manifests
+  (`.codex-plugin/plugin.json`,
+  `plugins/claude-code/.claude-plugin/plugin.json`).
+- All checks must pass before tagging: `uv sync --frozen`, `uv run pytest`,
+  `uv run ruff check src tests`, `uv run ruff format --check src tests`,
+  `git diff --check`, plus `uv build` and JSON/YAML validation.
+- Merge the release branch first, then create the tag from `master`.
+- Marketplace stable refs (Codex `--ref vX.Y.Z`) update only after the tag
+  exists. Never point docs or `marketplace.json` at a tag that is not yet
+  created.
+- Pushing a `v*.*.*` tag runs `.github/workflows/release.yml`, which only
+  verifies and builds distributions. It does not publish packages or create
+  releases.
+
 ## What a useful bug report contains
 
 - A short problem statement in one or two sentences.

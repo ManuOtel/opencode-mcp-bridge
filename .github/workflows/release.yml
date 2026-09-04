@@ -1,0 +1,44 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Set up uv
+        # astral-sh/setup-uv v5
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Sync dependencies
+        run: uv sync --frozen --python 3.12
+      - name: Run tests
+        run: uv run pytest
+      - name: Ruff check
+        run: uv run ruff check src tests
+      - name: Ruff format check
+        run: uv run ruff format --check src tests
+      - name: Whitespace check
+        run: git diff --check
+      - name: Validate plugin manifests
+        run: |
+          for f in \
+            .codex-plugin/plugin.json \
+            .mcp.json \
+            .agents/plugins/marketplace.json \
+            .claude-plugin/marketplace.json \
+            plugins/claude-code/.claude-plugin/plugin.json \
+            plugins/claude-code/.mcp.json; do
+            python3 -m json.tool "$f" > /dev/null
+          done
+      - name: Build distributions
+        run: uv build
