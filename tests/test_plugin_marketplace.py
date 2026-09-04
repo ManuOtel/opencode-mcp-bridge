@@ -93,7 +93,9 @@ def test_readme_points_at_marketplace_flow() -> None:
     assert ADD_COMMAND in text
     assert PLUGIN_NAME in text
     assert "docs/client-setup.md" in text
-    # Endpoint, token, and opinionated skill guidance stay intact.
-    assert "https://opencode-mcp.manuotel.com/worker-mcp" in text
+    # Placeholder endpoint, explicit URL env, token, and skill guidance stay intact.
+    assert "YOUR-BRIDGE-HOST" in text
+    assert "OPENCODE_MCP_URL" in text
     assert "OPENCODE_MCP_BEARER_TOKEN" in text
     assert "delegate-to-opencode" in text
+    assert "https://opencode-mcp.manuotel.com/worker-mcp" not in text

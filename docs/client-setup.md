@@ -3,6 +3,27 @@
 One-command path: `./scripts/install-client.sh --help`. Manual copy/paste below.
 There is no npm or Brew package; both clients install from this GitHub repo.
 
+> Your bridge vs the maintainer demo. This repo helps you connect Codex and
+> Claude Code to **your own** self-hosted `opencode-mcp-bridge` (your server,
+> your token, your `https://<your-domain>/worker-mcp`). Nothing in the generic
+> install path points at anyone else's server. The maintainer's demo endpoint
+> (`https://opencode-mcp.manuotel.com/worker-mcp`) is opt-in only: use it
+> solely if the maintainer explicitly invited you to try it, by exporting it
+> as your `OPENCODE_MCP_URL` (section 4). It never becomes your server
+> silently.
+
+## 0. Bridge URL setup (required, never defaults)
+
+Every command below needs your own bridge URL in the environment. The helper
+fails fast when it is missing; there is no fallback server.
+
+```bash
+export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
+```
+
+Use `/worker-mcp` for the compact five-tool worker endpoint (recommended).
+Use `/mcp` only for legacy full-catalog clients (section 4).
+
 ## 1. Token setup (never print or store the token)
 
 Export the Bearer token in each shell. The value lives only in the
@@ -23,11 +44,20 @@ Rotate on leak. Never commit `.env`.
 ## 2. Codex
 
 ```bash
-codex mcp add opencode --url https://opencode-mcp.manuotel.com/worker-mcp --bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN
+codex mcp add opencode --url "$OPENCODE_MCP_URL" --bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN
 ```
 
 This registers the compact worker MCP by env-var reference. Codex reads the
-token from `OPENCODE_MCP_BEARER_TOKEN` at request time.
+token from `OPENCODE_MCP_BEARER_TOKEN` at request time. The URL is a literal:
+Codex plugin bundles do not interpolate environment variables in the server
+URL, so register the transport per machine with your concrete URL (or use the
+helper, which requires `OPENCODE_MCP_URL`).
+
+Or via the helper (fails clearly when `OPENCODE_MCP_URL` is missing):
+
+```bash
+./scripts/install-client.sh codex
+```
 
 Use `--name <name>` via the helper to register under a different server name.
 
@@ -36,14 +66,15 @@ Use `--name <name>` via the helper to register under a different server name.
 Easiest path: install the `opencode-worker` plugin from this repo's Claude
 marketplace (section 7). It bundles the MCP transport
 (`plugins/claude-code/.mcp.json`, server `opencode`,
-`https://opencode-mcp.manuotel.com/worker-mcp`) plus the
-`coordinate-opencode-worker` skill. Set `OPENCODE_MCP_BEARER_TOKEN` in the
-environment as in section 1; the token is never stored in the repo.
+URL `${OPENCODE_MCP_URL}`) plus the `coordinate-opencode-worker` skill.
+Claude Code expands `${VAR}` references in `.mcp.json` at load time, so
+export **both** variables from sections 0 and 1 **before** installing the
+plugin; the token is never stored in the repo.
 
 Native MCP fallback (transport only, no skills):
 
 ```bash
-claude mcp add --transport http opencode https://opencode-mcp.manuotel.com/worker-mcp --header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"
+claude mcp add --transport http opencode "$OPENCODE_MCP_URL" --header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"
 ```
 
 Warning: Claude Code HTTP header configuration may persist the token locally
@@ -54,7 +85,7 @@ Use `--name <name>` via the helper to register under a different server name.
 
 ## 4. Which URL
 
-- New worker clients: `https://opencode-mcp.manuotel.com/worker-mcp`
+- New worker clients: `https://<your-domain>/worker-mcp`
   (exactly the five `worker_*` tools, compact context). This is the
   recommended endpoint: it never exposes `exec_run`, so a leaked token
   cannot become a direct shell.
@@ -63,7 +94,20 @@ Use `--name <name>` via the helper to register under a different server name.
   `exec_run` stays listed but fails closed unless the bridge operator sets
   `ENABLE_EXEC_RUN=true` in the deployment env file.
 - Both paths share the same Bearer token. `/health` stays open.
-- Override the helper default with `OPENCODE_MCP_URL=https://<your-domain>/worker-mcp`.
+- The helper takes the URL only from `OPENCODE_MCP_URL` and exits with an
+  error when it is unset or empty. There is no default server.
+
+### Optional: maintainer demo endpoint
+
+If the maintainer explicitly invited you to try their demo bridge, opt in
+explicitly per shell (never commit this anywhere):
+
+```bash
+export OPENCODE_MCP_URL="https://opencode-mcp.manuotel.com/worker-mcp"
+```
+
+That demo is someone else's server with its own token; it is not your
+bridge, and generic installs never use it unless you set it yourself.
 
 ## 5. Opinionated behavior (automatic with the plugin)
 
@@ -87,6 +131,14 @@ opinionated workflow:
 Manual MCP registration above connects the transport only. Install the plugin
 to get the delegation, verification, recovery, and Git workflow skills.
 
+Note on the Codex bundle: the shipped `.mcp.json` carries the visible
+placeholder `https://YOUR-BRIDGE-HOST/worker-mcp` because Codex does not
+support `${OPENCODE_MCP_URL}` interpolation in plugin server URLs. Do not
+edit the placeholder in the repo; register your real transport per machine
+with section 2 (the placeholder fails DNS loudly if ever used directly,
+which is intentional). The per-tool approval policy in that file still
+applies once your transport is registered.
+
 ## 6. Codex plugin install via Git marketplace
 
 The repository is the source of truth for the Codex plugin. The root plugin
@@ -104,7 +156,8 @@ codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref master
 Then install the `opencode-worker` plugin from that marketplace (Plugins
 Directory, or `codex plugin add opencode-worker --marketplace opencode-mcp-bridge` where the CLI supports
 it). Set `OPENCODE_MCP_BEARER_TOKEN` in the environment as in section 1; the
-token is never stored in the repo.
+token is never stored in the repo. Then register your own transport as in
+section 2 (required: the bundled placeholder URL is not usable as-is).
 
 This is different from the Claude Code native helper in section 3
 (`claude mcp add --transport http ...`): that command only registers the MCP
@@ -123,6 +176,7 @@ via the relative source `./plugins/claude-code` (owner `ManuOtel`). The
 existing Codex marketplace `.agents/plugins/marketplace.json` is unchanged.
 
 ```bash
+export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
 export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
 ```
 
@@ -142,11 +196,14 @@ commands, not shell commands):
 /plugin install opencode-worker@opencode-mcp-bridge
 ```
 
-Reload Claude Code if it asks for it. The plugin's MCP server reads the token from
-`OPENCODE_MCP_BEARER_TOKEN` at request time via `Bearer ${OPENCODE_MCP_BEARER_TOKEN}`.
+Reload Claude Code if it asks for it. The plugin's MCP server reads the URL
+from `OPENCODE_MCP_URL` and the token from `OPENCODE_MCP_BEARER_TOKEN` at
+request time via `${OPENCODE_MCP_URL}` and
+`Bearer ${OPENCODE_MCP_BEARER_TOKEN}`. Both variables must be exported
+before install, otherwise the transport has no server to reach.
 
 The bundled transport serves the compact worker endpoint
-(`https://opencode-mcp.manuotel.com/worker-mcp`, exactly the five
+(`https://<your-domain>/worker-mcp`, exactly the five
 `worker_*` tools) so a leaked token cannot become a direct shell. The plugin
 cannot guarantee the self-hosted bridge or OpenCode server is reachable;
 if the tools do not respond, check the server side.

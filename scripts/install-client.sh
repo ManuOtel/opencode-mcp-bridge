@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
-# Register the compact OpenCode worker MCP on Codex and/or Claude Code.
-# Usage: OPENCODE_MCP_BEARER_TOKEN=... ./scripts/install-client.sh [codex|claude|both] [--name <name>]
+# Register your own OpenCode bridge worker MCP on Codex and/or Claude Code.
+# Usage: OPENCODE_MCP_URL=... OPENCODE_MCP_BEARER_TOKEN=... ./scripts/install-client.sh [codex|claude|both] [--name <name>]
 set -euo pipefail
 
-DEFAULT_URL="https://opencode-mcp.manuotel.com/worker-mcp"
 DEFAULT_NAME="opencode"
 MODE="${1:-}"
 NAME="$DEFAULT_NAME"
 
 usage() {
   cat <<'USAGE'
-Usage: OPENCODE_MCP_BEARER_TOKEN=... ./scripts/install-client.sh [codex|claude|both] [--name <name>]
+Usage: OPENCODE_MCP_URL=... OPENCODE_MCP_BEARER_TOKEN=... ./scripts/install-client.sh [codex|claude|both] [--name <name>]
 
 Modes: codex, claude, both (required, first argument).
 Options: --name <name> (optional MCP server name, default: opencode).
-Env: OPENCODE_MCP_BEARER_TOKEN (required, never echoed),
-     OPENCODE_MCP_URL (optional, default: https://opencode-mcp.manuotel.com/worker-mcp).
+Env: OPENCODE_MCP_URL (required, your own bridge URL, e.g. https://<your-domain>/worker-mcp),
+     OPENCODE_MCP_BEARER_TOKEN (required, never echoed).
 USAGE
 }
 
@@ -58,11 +57,11 @@ if [ -z "${OPENCODE_MCP_BEARER_TOKEN:-}" ]; then
   exit 1
 fi
 
-MCP_URL="${OPENCODE_MCP_URL:-$DEFAULT_URL}"
-if [ -z "$MCP_URL" ]; then
-  echo "error: OPENCODE_MCP_URL is empty" >&2
+if [ -z "${OPENCODE_MCP_URL:-}" ]; then
+  echo "error: OPENCODE_MCP_URL is required (export your own bridge URL, e.g. https://<your-domain>/worker-mcp)" >&2
   exit 1
 fi
+MCP_URL="$OPENCODE_MCP_URL"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then

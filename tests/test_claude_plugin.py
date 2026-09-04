@@ -17,8 +17,9 @@ CODEX_MANIFEST = REPO / ".codex-plugin" / "plugin.json"
 DOCS = REPO / "docs" / "client-setup.md"
 README = REPO / "README.md"
 
-WORKER_URL = "https://opencode-mcp.manuotel.com/worker-mcp"
+URL_REF = "${OPENCODE_MCP_URL}"
 TOKEN_REF = "${OPENCODE_MCP_BEARER_TOKEN}"
+MAINTAINER_URL = "https://opencode-mcp.manuotel.com/worker-mcp"
 
 
 def test_claude_manifest_has_required_fields() -> None:
@@ -43,15 +44,19 @@ def test_claude_manifest_has_discovery_metadata() -> None:
 
 
 def test_claude_mcp_uses_env_var_reference_not_token() -> None:
-    """Claude MCP config uses remote HTTP + env-var header, no hardcoded token."""
+    """Claude MCP config uses remote HTTP + env-var URL/header, no hardcoded values."""
     raw = PLUGIN_MCP.read_text()
     config = json.loads(raw)
     server = config["mcpServers"]["opencode"]
     assert server["type"] == "http"
-    assert server["url"] == WORKER_URL
+    assert server["url"] == URL_REF
     assert server["headers"]["Authorization"] == f"Bearer {TOKEN_REF}"
+    assert URL_REF in raw
     assert TOKEN_REF in raw
-    redacted = raw.replace(f"Bearer {TOKEN_REF}", "")
+    assert MAINTAINER_URL not in raw, (
+        "bundled Claude config must not point at the maintainer server"
+    )
+    redacted = raw.replace(f"Bearer {TOKEN_REF}", "").replace(URL_REF, "")
     assert "bearer" not in redacted.lower(), "no hardcoded bearer token allowed"
 
 
@@ -105,6 +110,7 @@ def test_docs_and_readme_cover_claude_marketplace() -> None:
     assert "coordinate-opencode-worker" in docs
     assert "coordinate-opencode-worker" in readme
     assert ".claude-plugin/marketplace.json" in readme
+    assert 'export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"' in docs
     for text in (docs, readme):
         lowered = text.lower()
         assert "npm install" not in lowered

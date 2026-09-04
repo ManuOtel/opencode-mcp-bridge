@@ -11,12 +11,17 @@ plugin (`opencode-worker`, see `plugins/claude-code/`) with the
 `coordinate-opencode-worker` skill. Worker-first: scope a
 task, poll it, verify the diff, then clean up.
 
-## Quick connect
+## Quick connect (your own bridge)
 
 ```bash
+export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
 export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
 ./scripts/install-client.sh both
 ```
+
+The helper requires `OPENCODE_MCP_URL` and fails clearly when it is missing;
+it never falls back to anyone else's server. The maintainer demo endpoint is
+opt-in only (see [docs/client-setup.md](docs/client-setup.md) section 4).
 
 See [docs/client-setup.md](docs/client-setup.md) for copy/paste Codex and
 Claude Code commands, token handling, `/worker-mcp` vs `/mcp` URLs, and the
@@ -63,7 +68,10 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
 
   Then install `opencode-worker` from that marketplace. Set
   `OPENCODE_MCP_BEARER_TOKEN` in the environment; the token itself is never
-  stored in the repo. See [docs/client-setup.md](docs/client-setup.md) section 6.
+  stored in the repo. Then register your own transport per
+  [docs/client-setup.md](docs/client-setup.md) section 2 (required: the
+  bundled placeholder URL is not usable as-is). See
+  [docs/client-setup.md](docs/client-setup.md) section 6.
   This is the Codex plugin with the opinionated worker skills
   (`delegate-to-opencode`, `verify-opencode-work`, `recover-opencode-task`,
   `opencode-git-workflow`).
@@ -73,6 +81,7 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
   owner `ManuOtel`):
 
   ```bash
+  export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
   export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
   claude plugin marketplace add ManuOtel/opencode-mcp-bridge
   claude plugin install opencode-worker@opencode-mcp-bridge
@@ -81,15 +90,18 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
   Inside an interactive Claude Code session the equivalents are the session
   commands `/plugin marketplace add ManuOtel/opencode-mcp-bridge` and
   `/plugin install opencode-worker@opencode-mcp-bridge` (not shell commands).
-  Reload if requested. The plugin bundles the MCP transport plus the
-  `coordinate-opencode-worker` skill. See
-  [docs/client-setup.md](docs/client-setup.md) section 7. There is no npm or
-  Brew package; both marketplaces install from this GitHub repo.
-- Claude Code (manual transport only, no skills): `claude mcp add --transport http opencode https://opencode-mcp.manuotel.com/worker-mcp --header "Authorization: Bearer <token>"`
-- Codex (manual transport only): `codex mcp add opencode --url https://opencode-mcp.manuotel.com/worker-mcp --bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN`.
-  The manifest is
-  `.codex-plugin/plugin.json`; bundled MCP config is `.mcp.json` (server `opencode`,
-  `https://opencode-mcp.manuotel.com/worker-mcp`, worker-only tools).
+  Reload if requested. The plugin bundles the MCP transport (URL from
+  `${OPENCODE_MCP_URL}`, token from `${OPENCODE_MCP_BEARER_TOKEN}`) plus the
+  `coordinate-opencode-worker` skill. Both variables must be exported before
+  install. See [docs/client-setup.md](docs/client-setup.md) section 7. There
+  is no npm or Brew package; both marketplaces install from this GitHub repo.
+- Claude Code (manual transport only, no skills): `claude mcp add --transport http opencode "$OPENCODE_MCP_URL" --header "Authorization: Bearer <token>"`
+- Codex (manual transport only): `codex mcp add opencode --url "$OPENCODE_MCP_URL" --bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN`.
+  The manifest is `.codex-plugin/plugin.json`; bundled MCP config is
+  `.mcp.json` (server `opencode`, visible placeholder
+  `https://YOUR-BRIDGE-HOST/worker-mcp`, worker-only tools). Codex does not
+  interpolate env vars in plugin server URLs, so register your own transport
+  per machine as above; the placeholder fails loudly if ever used directly.
 - Other clients: add an MCP server with an `Authorization: Bearer <token>` header.
   Existing clients keep the full catalog at `https://<your-domain>/mcp`;
   worker-only clients use `https://<your-domain>/worker-mcp`. Both paths share

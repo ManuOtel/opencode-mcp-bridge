@@ -2,7 +2,7 @@
   "mcpServers": {
     "opencode": {
       "type": "http",
-      "url": "https://opencode-mcp.manuotel.com/worker-mcp",
+      "url": "https://YOUR-BRIDGE-HOST/worker-mcp",
       "bearer_token_env_var": "OPENCODE_MCP_BEARER_TOKEN",
       "enabled": true,
       "tools": {
