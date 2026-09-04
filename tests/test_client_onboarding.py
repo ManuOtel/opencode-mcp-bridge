@@ -13,8 +13,10 @@ REPO = Path(__file__).resolve().parents[1]
 HELPER = REPO / "scripts" / "install-client.sh"
 DOCS = REPO / "docs" / "client-setup.md"
 README = REPO / "README.md"
+CODEX_BUNDLE = REPO / ".mcp.json"
 
-DEFAULT_URL = "https://opencode-mcp.manuotel.com/worker-mcp"
+MAINTAINER_URL = "https://opencode-mcp.manuotel.com/worker-mcp"
+PLACEHOLDER_HOST = "YOUR-BRIDGE-HOST"
 BASH = shutil.which("bash") or "bash"
 
 
@@ -59,14 +61,61 @@ def test_helper_has_no_eval_and_quotes_args() -> None:
 
 
 def test_helper_usage_text() -> None:
-    """Usage covers modes, --name, token env, URL default."""
+    """Usage covers modes, --name, required token env, required URL env."""
     proc = _run("--help", env={"OPENCODE_MCP_BEARER_TOKEN": "x"})
     assert proc.returncode == 0
     out = proc.stdout
     assert "codex" in out and "claude" in out and "both" in out
     assert "--name" in out
     assert "OPENCODE_MCP_BEARER_TOKEN" in out
-    assert DEFAULT_URL in out
+    assert "OPENCODE_MCP_URL" in out
+    assert "required" in out
+    assert MAINTAINER_URL not in out, "usage must not default to the maintainer server"
+
+
+def test_helper_requires_url_without_fallback() -> None:
+    """Missing URL fails fast with a clear error and no silent fallback."""
+    proc = _run("codex", env={"OPENCODE_MCP_BEARER_TOKEN": "canary-token-url001"})
+    assert proc.returncode != 0
+    combined = proc.stdout + proc.stderr
+    assert "OPENCODE_MCP_URL is required" in combined
+    assert "canary-token-url001" not in combined
+    assert MAINTAINER_URL not in combined
+
+
+def test_helper_uses_explicit_url(tmp_path: Path) -> None:
+    """A stub codex CLI receives exactly the URL from OPENCODE_MCP_URL."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    seen = tmp_path / "codex-args.txt"
+    stub = bin_dir / "codex"
+    stub.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {seen}\n")
+    stub.chmod(0o755)
+    url = "https://bridge.example.com/worker-mcp"
+    proc = _run(
+        "codex",
+        env={
+            "OPENCODE_MCP_BEARER_TOKEN": "canary-token-url002",
+            "OPENCODE_MCP_URL": url,
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert url in seen.read_text()
+    assert "canary-token-url002" not in proc.stdout + proc.stderr
+
+
+def test_codex_bundle_has_placeholder_not_maintainer_url() -> None:
+    """Bundled Codex .mcp.json uses a visible placeholder, never the maintainer server."""
+    import json
+
+    raw = CODEX_BUNDLE.read_text()
+    assert MAINTAINER_URL not in raw
+    assert PLACEHOLDER_HOST in raw
+    config = json.loads(raw)
+    server = config["mcpServers"]["opencode"]
+    assert server["bearer_token_env_var"] == "OPENCODE_MCP_BEARER_TOKEN"
+    assert "worker_run" in server["tools"]
 
 
 def test_helper_rejects_bad_mode() -> None:
@@ -94,7 +143,9 @@ def test_helper_never_echoes_token(tmp_path: Path) -> None:
 def test_helper_missing_command_fails_clearly(tmp_path: Path) -> None:
     """Absent codex/claude CLIs fail clearly without leaking the token."""
     canary = "canary-token-xyz789"
-    proc = _run("claude", env=_env_without_commands(tmp_path, canary))
+    env = _env_without_commands(tmp_path, canary)
+    env["OPENCODE_MCP_URL"] = "https://bridge.example.com/worker-mcp"
+    proc = _run("claude", env=env)
     assert proc.returncode != 0
     combined = proc.stdout + proc.stderr
     assert canary not in combined
@@ -115,10 +166,24 @@ def test_docs_commands_and_urls() -> None:
     assert "--bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN" in text
     assert "claude mcp add --transport http" in text
     assert '--header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"' in text
-    assert DEFAULT_URL in text
+    assert "$OPENCODE_MCP_URL" in text
+    assert 'export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"' in text
     assert "/worker-mcp" in text
     assert "/mcp" in text
     assert "OPENCODE_MCP_BEARER_TOKEN" in text
+
+
+def test_docs_distinguish_own_bridge_from_demo() -> None:
+    """Docs explain own-bridge-first; the maintainer URL is opt-in only."""
+    text = DOCS.read_text()
+    flat = " ".join(text.split())
+    assert "your own" in flat
+    assert "opt-in only" in flat or "opt in explicitly" in flat
+    assert "no fallback server" in flat or "no default server" in flat
+    # The maintainer URL may appear solely as an explicit opt-in example.
+    assert MAINTAINER_URL in text
+    demo_idx = text.index("maintainer demo")
+    assert text.index(MAINTAINER_URL) > demo_idx
 
 
 def test_docs_explain_plugin_skills() -> None:
@@ -141,6 +206,8 @@ def test_readme_quick_connect() -> None:
     assert "Quick connect" in text
     assert "docs/client-setup.md" in text
     assert "scripts/install-client.sh" in text
+    assert "OPENCODE_MCP_URL" in text
+    assert MAINTAINER_URL not in text, "README generic path must not point at the maintainer server"
     # Opinionated skills/AGENTS.md references stay intact.
     assert "AGENTS.md" in text
     assert "delegate-to-opencode" in text
