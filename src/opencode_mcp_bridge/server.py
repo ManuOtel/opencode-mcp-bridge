@@ -20,7 +20,7 @@ import json
 import os
 import tempfile
 import time
-from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -383,6 +383,8 @@ TASK_REQUEST_ID_MAX_CHARS = 128
 TASK_DIRECTORY_MAX_CHARS = 500
 TASK_TITLE_MAX_CHARS = 200
 TASK_AGENT_MAX_CHARS = 100
+TASK_LOCK_TIMEOUT_S = 10.0
+TASK_LOCK_POLL_S = 0.02
 
 _TASK_LOCK: asyncio.Lock | None = None
 _TASK_LOCK_LOOP: Any = None
@@ -407,6 +409,153 @@ def _get_task_lock() -> asyncio.Lock:
         _TASK_LOCK = asyncio.Lock()
         _TASK_LOCK_LOOP = loop
     return _TASK_LOCK
+
+
+def _task_lock_path() -> Path:
+    """Return the sibling advisory lock file for the task registry."""
+    state = _task_state_path()
+    return state.parent / (state.name + ".lock")
+
+
+def _require_fcntl() -> Any:
+    """Return the fcntl module or fail closed on unsupported platforms.
+
+    Returns:
+        The fcntl module.
+
+    Raises:
+        RuntimeError: If advisory locking is unavailable. The message
+            carries the registry path only, never prompts or secrets.
+    """
+    try:
+        import fcntl as fcntl_mod
+    except ImportError:
+        raise RuntimeError(
+            f"task registry lock unavailable on this platform for {_task_state_path()}"
+        )
+    if not all(hasattr(fcntl_mod, name) for name in ("LOCK_EX", "LOCK_NB", "LOCK_UN")):
+        raise RuntimeError(
+            f"task registry lock unavailable on this platform for {_task_state_path()}"
+        )
+    return fcntl_mod
+
+
+@contextmanager
+def _held_task_file_lock(timeout_s: float | None = None):  # type: ignore[no-untyped-def]
+    """Hold an advisory exclusive file lock (sync, bounded, fail-closed).
+
+    Dependency-free cross-process mutual exclusion for TASK_STATE_PATH
+    readers/writers that share one filesystem. Uses fcntl.flock on a
+    sibling ``<tasks>.lock`` file with non-blocking retries so waits are
+    bounded by ``timeout_s``. The lock file is kept (never unlinked) to
+    avoid unlink races; locking is advisory so all registry writers must
+    cooperate through this helper.
+
+    Args:
+        timeout_s: Max seconds to wait before failing closed.
+
+    Raises:
+        RuntimeError: If fcntl is unavailable, the lock file cannot be
+            created, or the timeout expires. Messages carry the path
+            only, never prompts or secrets.
+    """
+    if timeout_s is None:
+        timeout_s = TASK_LOCK_TIMEOUT_S
+    fcntl_mod = _require_fcntl()
+    lock_path = _task_lock_path()
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"task registry lock at {lock_path} is unwritable: {exc.strerror or 'I/O error'}"
+        )
+    try:
+        handle = open(lock_path, "a+b")  # noqa: SIM115 - held open for flock
+    except OSError as exc:
+        raise RuntimeError(
+            f"task registry lock at {lock_path} is unwritable: {exc.strerror or 'I/O error'}"
+        )
+    deadline = time.monotonic() + timeout_s
+    try:
+        while True:
+            try:
+                fcntl_mod.flock(handle.fileno(), fcntl_mod.LOCK_EX | fcntl_mod.LOCK_NB)
+                break
+            except (BlockingIOError, PermissionError, OSError):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"task registry at {_task_state_path()} is busy: lock timeout; retry later"
+                    )
+                time.sleep(TASK_LOCK_POLL_S)
+        yield handle
+    finally:
+        with suppress(Exception):
+            fcntl_mod.flock(handle.fileno(), fcntl_mod.LOCK_UN)
+        with suppress(Exception):
+            handle.close()
+
+
+@asynccontextmanager
+async def _locked_task_registry(timeout_s: float | None = None):  # type: ignore[no-untyped-def]
+    """Hold the asyncio lock plus the cross-process file lock.
+
+    Ordering is always asyncio-first then file lock; release is reverse.
+    The file lock is held across the full load/check/create/save/prompt
+    sequence (including slow OpenCode network calls) because that is what
+    the existing correctness model requires: the requestID dedup check,
+    liveness probe, session creation, atomic save, and failure cleanup
+    must be one atomic unit across processes, otherwise two bridges can
+    create duplicate requestID sessions or clobber each other's records
+    via load-modify-save races. Waiters are bounded by ``timeout_s`` and
+    fail closed (RuntimeError, path only) instead of duplicating work.
+
+    Args:
+        timeout_s: Max seconds to wait for the file lock.
+
+    Raises:
+        RuntimeError: On unsupported platforms, unwritable lock files,
+            or lock timeout. No prompts or secrets in the message.
+    """
+    if timeout_s is None:
+        timeout_s = TASK_LOCK_TIMEOUT_S
+    lock = _get_task_lock()
+    async with lock:
+        fcntl_mod = _require_fcntl()
+        lock_path = _task_lock_path()
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"task registry lock at {lock_path} is unwritable: {exc.strerror or 'I/O error'}"
+            )
+        try:
+            handle = open(  # noqa: SIM115, ASYNC230 - held open for flock; fast local open
+                lock_path, "a+b"
+            )
+        except OSError as exc:
+            raise RuntimeError(
+                f"task registry lock at {lock_path} is unwritable: {exc.strerror or 'I/O error'}"
+            )
+        deadline = time.monotonic() + timeout_s
+        try:
+            while True:
+                try:
+                    fcntl_mod.flock(handle.fileno(), fcntl_mod.LOCK_EX | fcntl_mod.LOCK_NB)
+                    break
+                except (BlockingIOError, PermissionError, OSError):
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            f"task registry at {_task_state_path()} is busy: lock timeout; retry later"
+                        )
+                    await asyncio.sleep(TASK_LOCK_POLL_S)
+            try:
+                yield
+            finally:
+                with suppress(Exception):
+                    fcntl_mod.flock(handle.fileno(), fcntl_mod.LOCK_UN)
+        finally:
+            with suppress(Exception):
+                handle.close()
 
 
 def _canonical_task_dir(directory: str | None) -> str:
@@ -1016,8 +1165,10 @@ def _build_task_record(
 def _remove_task_record(task_id: str) -> None:
     """Remove one task record.
 
-    Callers mutating the registry must hold _get_task_lock so concurrent
-    worker_run sequences cannot interleave between this load and save.
+    Callers mutating the registry must hold _locked_task_registry so
+    concurrent worker_run sequences in this process and in sibling
+    bridge processes sharing TASK_STATE_PATH cannot interleave between
+    this load and save.
 
     Args:
         task_id: Task ID to drop.
@@ -1072,9 +1223,14 @@ async def worker_run(
     fails, the record is removed and the new session is deleted
     best-effort, then the original error is re-raised. A registry save
     failure also deletes the new session and raises instead of reporting
-    success. The read/check/create/save/prompt sequence holds a
-    process-wide asyncio lock so concurrent retries cannot duplicate
-    sessions or clobber records.
+    success. The read/check/create/save/prompt sequence holds the
+    asyncio lock plus a bounded cross-process file lock so concurrent
+    retries in this process and in sibling bridge processes sharing
+    TASK_STATE_PATH cannot duplicate sessions or clobber records. The
+    file lock is held across slow OpenCode calls because the dedup
+    check, liveness probe, creation, save, and failure cleanup must be
+    one atomic unit; waiters time out fail-closed instead of
+    duplicating work.
 
     Pass the returned directory to worker_status when it differs from the
     configured default: status and messages are directory-scoped. The
@@ -1111,8 +1267,7 @@ async def worker_run(
         fingerprint = _fingerprint_task(
             message, directory, title, agent, resolved_provider, resolved_model
         )
-        lock = _get_task_lock()
-        async with lock:
+        async with _locked_task_registry():
             stored_tasks = _load_task_state()
             if normalized_request is not None:
                 existing = _find_task_by_request(stored_tasks, normalized_request)
@@ -1750,8 +1905,7 @@ async def worker_cleanup(
                 action="abort",
             )
             return _obs_result
-        lock = _get_task_lock()
-        async with lock:
+        async with _locked_task_registry():
             try:
                 await client.abort_session(taskID, query_dir)
             except Exception:  # noqa: BLE001 - best-effort abort; outcome via aborted flag
