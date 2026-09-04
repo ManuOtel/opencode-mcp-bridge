@@ -25,7 +25,8 @@ opt-in only (see [docs/client-setup.md](docs/client-setup.md) section 4).
 
 See [docs/client-setup.md](docs/client-setup.md) for copy/paste Codex and
 Claude Code commands, token handling, `/worker-mcp` vs `/mcp` URLs, and the
-opinionated plugin skills.
+opinionated plugin skills. For GitHub Copilot, Copilot Studio, and
+Microsoft 365 Copilot, see [docs/copilot-setup.md](docs/copilot-setup.md).
 
 ## Worker quickstart (start here)
 
