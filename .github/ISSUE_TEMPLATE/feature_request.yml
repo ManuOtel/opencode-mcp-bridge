@@ -1,0 +1,69 @@
+name: Feature request
+description: Propose a change to the bridge, a plugin, a skill, or the docs.
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep the request focused on one change.
+        Read `CONTRIBUTING.md` first. Do not include secrets or personal data.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and use case
+      description: What task is hard or not possible today? Who needs it?
+      placeholder: As an operator I need a clear error when the task registry is locked.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What must change? How must it work from the user view?
+      placeholder: Return a short error that names the locked path and the retry step.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you examined
+      description: What workarounds or other designs did you examine?
+      placeholder: Poll again after a delay. Read the server log on the host.
+    validations:
+      required: false
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      description: Which part of the project does this request affect?
+      multiple: true
+      options:
+        - Bridge server (/worker-mcp, /mcp, /health)
+        - Codex plugin (opencode-worker)
+        - Claude Code plugin (opencode-worker)
+        - Skills and worker playbook
+        - Docs (client setup, tool API, Copilot setup)
+        - Deployment files (Docker, Traefik, systemd)
+        - Other (state in the proposal)
+    validations:
+      required: true
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Willingness to contribute
+      description: Can you help with the change?
+      options:
+        - I can open a pull request for this change
+        - I can help test a fix
+        - I can only report the need
+    validations:
+      required: false
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy statement
+      description: You must verify this before you submit.
+      options:
+        - label: This request holds no tokens, passwords, private URLs, or personal data.
+          required: true

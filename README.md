@@ -279,6 +279,16 @@ git diff --check
 CI (`.github/workflows/ci.yml`) runs the same checks on pull requests and
 pushes to master, plus JSON validation of the Codex and Claude plugin manifests.
 
+## Community
+
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) before you change code or docs.
+- Obey the [Code of Conduct](CODE_OF_CONDUCT.md) in all project spaces.
+- Report security faults in private per [SECURITY.md](SECURITY.md).
+- Open a [bug report or feature request](https://github.com/ManuOtel/opencode-mcp-bridge/issues/new/choose)
+  or read [open issues](https://github.com/ManuOtel/opencode-mcp-bridge/issues).
+- Open [pull requests](https://github.com/ManuOtel/opencode-mcp-bridge/pulls)
+  from a feature branch, never directly from `master`.
+
 ## License
 
 PolyForm Noncommercial 1.0.0 - free for noncommercial use and modification,
