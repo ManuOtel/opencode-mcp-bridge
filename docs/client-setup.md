@@ -3,6 +3,10 @@
 One-command path: `./scripts/install-client.sh --help`. Manual copy/paste below.
 There is no npm or Brew package; both clients install from this GitHub repo.
 
+For Copilot-family products (GitHub Copilot, Copilot Studio, Microsoft 365
+Copilot), see [docs/copilot-setup.md](copilot-setup.md). Those three cases are
+separate from Codex and Claude Code.
+
 > Your bridge vs the maintainer demo. This repo helps you connect Codex and
 > Claude Code to **your own** self-hosted `opencode-mcp-bridge` (your server,
 > your token, your `https://<your-domain>/worker-mcp`). Nothing in the generic
@@ -207,3 +211,11 @@ The bundled transport serves the compact worker endpoint
 `worker_*` tools) so a leaked token cannot become a direct shell. The plugin
 cannot guarantee the self-hosted bridge or OpenCode server is reachable;
 if the tools do not respond, check the server side.
+
+## 8. Copilot-family products
+
+GitHub Copilot cloud agent and code review, Microsoft Copilot Studio, and
+Microsoft 365 Copilot each need their own steps. See
+[copilot-setup.md](copilot-setup.md) for the three separate cases, the
+read-only and change-enabled JSON blocks, and the official GitHub and
+Microsoft links.
