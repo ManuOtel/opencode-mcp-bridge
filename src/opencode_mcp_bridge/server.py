@@ -28,7 +28,8 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from opencode_mcp_bridge.config import Settings, load_settings
+from opencode_mcp_bridge.config import Settings, _realpath_str, load_settings
+from opencode_mcp_bridge.config import _is_within_root as _within_root
 from opencode_mcp_bridge.opencode_client import OpencodeClient, OpencodeError
 
 WORKER_INSTRUCTIONS = (
@@ -145,7 +146,8 @@ async def list_agents(directory: str | None = None) -> list[dict[str, Any]]:
     Returns:
         Agent list with name/mode/description.
     """
-    return await get_client().list_agents(directory)
+    effective = _authorize_optional_directory(directory)
+    return await get_client().list_agents(effective)
 
 
 @mcp.tool(
@@ -164,12 +166,13 @@ async def create_session(
 
     Args:
         title: Session title.
-        directory: Working directory (any path allowed).
+        directory: Working directory (must be within allowed directories).
 
     Returns:
         Created session returned by opencode. Select agent, provider, and model on send_message.
     """
-    session = await get_client().create_session(title, directory)
+    effective = _authorize_optional_directory(directory)
+    session = await get_client().create_session(title, effective)
     return OpencodeClient._simplify_session(session)
 
 
@@ -206,8 +209,9 @@ async def send_message(
     """
     if (message is None) == (prompt is None):
         raise ValueError("Exactly one of message or prompt must be supplied")
+    effective = _authorize_optional_directory(directory)
     return await get_client().send_message(
-        sessionID, message if message is not None else prompt, providerID, modelID, agent, directory
+        sessionID, message if message is not None else prompt, providerID, modelID, agent, effective
     )
 
 
@@ -229,7 +233,8 @@ async def list_sessions(directory: str | None = None, limit: int = 30) -> list[d
     Returns:
         Simplified session dicts.
     """
-    return await get_client().list_sessions(directory, max(1, min(limit, 100)))
+    effective = _authorize_optional_directory(directory)
+    return await get_client().list_sessions(effective, max(1, min(limit, 100)))
 
 
 @mcp.tool(
@@ -250,7 +255,8 @@ async def get_session(sessionID: str, directory: str | None = None) -> dict[str,
     Returns:
         Simplified session dict.
     """
-    return await get_client().get_session(sessionID, directory)
+    effective = _authorize_optional_directory(directory)
+    return await get_client().get_session(sessionID, effective)
 
 
 @mcp.tool(
@@ -274,7 +280,8 @@ async def list_messages(
     Returns:
         List of {id, role, text, time} dicts.
     """
-    return await get_client().list_messages(sessionID, directory, max(1, min(limit, 200)))
+    effective = _authorize_optional_directory(directory)
+    return await get_client().list_messages(sessionID, effective, max(1, min(limit, 200)))
 
 
 @mcp.tool(
@@ -295,7 +302,8 @@ async def abort_session(sessionID: str, directory: str | None = None) -> dict[st
     Returns:
         Dict with sessionID and aborted=True.
     """
-    await get_client().abort_session(sessionID, directory)
+    effective = _authorize_optional_directory(directory)
+    await get_client().abort_session(sessionID, effective)
     return {"sessionID": sessionID, "aborted": True}
 
 
@@ -317,7 +325,8 @@ async def delete_session(sessionID: str, directory: str | None = None) -> dict[s
     Returns:
         Dict with sessionID and deleted=True.
     """
-    await get_client().delete_session(sessionID, directory)
+    effective = _authorize_optional_directory(directory)
+    await get_client().delete_session(sessionID, effective)
     return {"sessionID": sessionID, "deleted": True}
 
 
@@ -342,7 +351,8 @@ async def get_diff(
     Returns:
         File diff list from opencode.
     """
-    return await get_client().get_diff(sessionID, messageID, directory)
+    effective = _authorize_optional_directory(directory)
+    return await get_client().get_diff(sessionID, messageID, effective)
 
 
 WORKER_OUTPUT_DEFAULT_CHARS = 12000
@@ -420,6 +430,61 @@ def _validate_task_directory(directory: str, *, what: str = "directory") -> None
     """
     if len(directory) > TASK_DIRECTORY_MAX_CHARS:
         raise ValueError(f"{what} must be at most {TASK_DIRECTORY_MAX_CHARS} chars")
+
+
+def _authorize_directory(directory: str, *, what: str = "directory") -> str:
+    """Authorize a directory against ALLOWED_DIRECTORIES canonically.
+
+    Length is checked first, then the path is resolved with realpath
+    semantics (symlinks, dot segments, traversal) before comparison.
+    A path equal to a root or below a root is allowed; sibling-prefix
+    matches are rejected because comparison uses path relativity,
+    not string prefixes.
+
+    Args:
+        directory: Requested directory path.
+        what: Field name used in the error message.
+
+    Returns:
+        Canonical authorized path string.
+
+    Raises:
+        ValueError: If the path is outside all allowed roots.
+    """
+    _validate_task_directory(directory, what=what)
+    cleaned = directory.strip()
+    if not cleaned:
+        return _authorize_optional_directory(None, what=what)
+    candidate_real = _realpath_str(cleaned)
+    settings = get_settings()
+    for root in settings.allowed_directories:
+        if _within_root(candidate_real, _realpath_str(root)):
+            return candidate_real
+    raise ValueError(f"{what} is not within allowed directories")
+
+
+def _authorize_optional_directory(directory: str | None, *, what: str = "directory") -> str:
+    """Authorize an optional directory, falling back to the default.
+
+    Args:
+        directory: Requested directory or None (server default).
+        what: Field name used in the error message.
+
+    Returns:
+        Canonical authorized path string.
+
+    Raises:
+        ValueError: If the effective path is outside allowed roots.
+    """
+    if directory is None or not directory.strip():
+        settings = get_settings()
+        _validate_task_directory(settings.default_directory, what=what)
+        candidate_real = _realpath_str(settings.default_directory)
+        for root in settings.allowed_directories:
+            if _within_root(candidate_real, _realpath_str(root)):
+                return candidate_real
+        raise ValueError(f"{what} is not within allowed directories")
+    return _authorize_directory(directory, what=what)
 
 
 WORKER_TOOL_NAMES = frozenset(
@@ -978,8 +1043,8 @@ async def worker_run(
 
     Args:
         message: Task prompt for the worker.
-        directory: Working directory (any path allowed up to
-            TASK_DIRECTORY_MAX_CHARS).
+        directory: Working directory (must be within allowed directories,
+            up to TASK_DIRECTORY_MAX_CHARS).
         title: Session title.
         agent: Optional agent override.
         providerID: Optional model override provider.
@@ -992,15 +1057,12 @@ async def worker_run(
         deduplicated flag.
     """
     normalized_request = _normalize_request_id(requestID)
+    authorized_dir = _authorize_optional_directory(directory)
     client = get_client()
     resolved_provider, resolved_model = client.resolve_model(providerID, modelID)
     fingerprint = _fingerprint_task(
         message, directory, title, agent, resolved_provider, resolved_model
     )
-    if directory is not None:
-        _validate_task_directory(directory)
-    else:
-        _validate_task_directory(client.default_directory)
     lock = _get_task_lock()
     async with lock:
         stored_tasks = _load_task_state()
@@ -1009,6 +1071,9 @@ async def worker_run(
             if existing is not None:
                 if existing.get("fingerprint") != fingerprint:
                     raise ValueError("requestID was already used with different inputs")
+                existing_dir = existing.get("directory")
+                if isinstance(existing_dir, str) and existing_dir.strip():
+                    _authorize_directory(existing_dir)
                 task_id = existing.get("taskID")
                 alive = (
                     await _recorded_session_alive(client, task_id, existing.get("directory"))
@@ -1030,17 +1095,17 @@ async def worker_run(
                     }
                 if isinstance(task_id, str):
                     stored_tasks.pop(task_id, None)
-        session = await client.create_session(title, directory)
+        session = await client.create_session(title, authorized_dir)
         session_id = session.get("id") if isinstance(session, dict) else None
         if not session_id:
             raise ValueError("opencode session response contained no id")
         effective_dir = session.get("directory") if isinstance(session, dict) else None
         effective_title = session.get("title") if isinstance(session, dict) else None
         if directory is None:
-            resolved_dir = effective_dir or client.default_directory
+            resolved_raw = effective_dir or authorized_dir
         else:
-            resolved_dir = effective_dir or directory
-        _validate_task_directory(resolved_dir)
+            resolved_raw = effective_dir or authorized_dir
+        resolved_dir = _authorize_directory(resolved_raw)
         record = _build_task_record(
             session_id,
             normalized_request,
@@ -1056,10 +1121,12 @@ async def worker_run(
             _save_task_state(stored_tasks)
         except Exception:
             with suppress(Exception):
-                await client.delete_session(session_id, directory)
+                await client.delete_session(session_id, authorized_dir)
             raise
         try:
-            await client.prompt_async(session_id, message, providerID, modelID, agent, directory)
+            await client.prompt_async(
+                session_id, message, providerID, modelID, agent, authorized_dir
+            )
         except Exception:
             with suppress(Exception):
                 tasks = _load_task_state()
@@ -1067,7 +1134,7 @@ async def worker_run(
                     del tasks[session_id]
                     _save_task_state(tasks)
             with suppress(Exception):
-                await client.delete_session(session_id, directory)
+                await client.delete_session(session_id, authorized_dir)
             raise
         return {
             "taskID": session_id,
@@ -1132,13 +1199,20 @@ async def worker_status(
     saved: dict[str, Any] | None = None
     if directory is None:
         saved = _load_task_state().get(taskID)
-    effective_query = directory if directory is not None else (saved or {}).get("directory")
     if directory is not None:
-        effective_dir = directory
+        authorized = _authorize_directory(directory)
+        effective_query = authorized
+        effective_dir = authorized
     elif saved and saved.get("directory"):
-        effective_dir = saved.get("directory")
+        saved_dir = saved.get("directory")
+        if not isinstance(saved_dir, str) or not saved_dir.strip():
+            effective_dir = _authorize_optional_directory(None)
+        else:
+            effective_dir = _authorize_directory(saved_dir)
+        effective_query = effective_dir
     else:
-        effective_dir = client.default_directory
+        effective_dir = _authorize_optional_directory(None)
+        effective_query = effective_dir
     cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
     statuses = await client.get_session_status(effective_query)
     raw = statuses.get(taskID) if isinstance(statuses, dict) else None
@@ -1324,7 +1398,7 @@ async def exec_run(
             "exec_run is disabled: set ENABLE_EXEC_RUN=true to opt in. "
             "Prefer /worker-mcp session tools for code edits."
         )
-    cwd = workdir or settings.default_directory
+    cwd = _authorize_optional_directory(workdir, what="workdir")
     timeout = timeout_s or settings.exec_timeout_s
     timeout = max(1, min(timeout, 600))
     try:
@@ -1409,8 +1483,12 @@ async def worker_verify(
         raise ValueError("taskID must not be empty")
     status_result = await worker_status(taskID, directory, True, max_output_chars)
     recovered_dir = status_result.get("directory")
-    client = get_client()
-    effective_dir = directory or recovered_dir or client.default_directory
+    if directory is not None:
+        effective_dir = _authorize_directory(directory)
+    elif isinstance(recovered_dir, str) and recovered_dir.strip():
+        effective_dir = _authorize_directory(recovered_dir)
+    else:
+        effective_dir = _authorize_optional_directory(None)
     verification = await _collect_verification(effective_dir)
     return {**status_result, "directory": verification["directory"], "verification": verification}
 
@@ -1465,8 +1543,15 @@ async def worker_cleanup(
     saved_dir: str | None = None
     if directory is None:
         saved_dir = (_load_task_state().get(taskID) or {}).get("directory")
-    query_dir = directory if directory is not None else saved_dir
-    effective_dir = directory or saved_dir or client.default_directory
+    if directory is not None:
+        effective_dir = _authorize_directory(directory)
+        query_dir: str | None = effective_dir
+    elif isinstance(saved_dir, str) and saved_dir.strip():
+        effective_dir = _authorize_directory(saved_dir)
+        query_dir = effective_dir
+    else:
+        effective_dir = _authorize_optional_directory(None)
+        query_dir = effective_dir
     if normalized == "abort":
         await client.abort_session(taskID, query_dir)
         return {

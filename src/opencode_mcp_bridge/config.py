@@ -57,12 +57,132 @@ class Settings:
     mcp_host: str
     mcp_port: int
     default_directory: str
+    allowed_directories: tuple[str, ...]
     default_provider_id: str
     default_model_id: str
     exec_timeout_s: int
     exec_max_output_chars: int
     task_state_path: str
     enable_exec_run: bool
+
+
+def _normalize_dir(raw: str | None, fallback: str) -> str:
+    """Normalize a directory to an absolute expanded path.
+
+    Args:
+        raw: Raw env value (may be None or blank).
+        fallback: Used when raw is None or blank.
+
+    Returns:
+        Absolute path with ~ expanded (symlinks not resolved here;
+        authorization resolves canonically per request).
+    """
+    candidate = (raw or "").strip() or fallback
+    expanded = os.path.expanduser(candidate.strip())
+    if not os.path.isabs(expanded):
+        expanded = os.path.abspath(os.path.join(os.getcwd(), expanded))
+    else:
+        expanded = os.path.abspath(expanded)
+    return expanded
+
+
+def _realpath_str(path: str) -> str:
+    """Return the canonical real path for authorization comparisons.
+
+    Uses os.path.realpath so symlinks, dot segments, and traversal
+    resolve before any allowlist check.
+
+    Args:
+        path: Directory path (absolute or relative, ~ allowed).
+
+    Returns:
+        Canonical absolute path string.
+    """
+    expanded = os.path.expanduser(path.strip())
+    if not os.path.isabs(expanded):
+        expanded = os.path.join(os.getcwd(), expanded)
+    return os.path.realpath(expanded)
+
+
+def _is_within_root(candidate_real: str, root_real: str) -> bool:
+    """Check whether a canonical path equals or sits below a root.
+
+    String prefix checks are not used, so sibling-prefix tricks
+    (/root-evil vs /root) do not pass.
+
+    Args:
+        candidate_real: Canonical candidate path.
+        root_real: Canonical root path.
+
+    Returns:
+        True when equal or below the root.
+    """
+    try:
+        return Path(candidate_real).is_relative_to(Path(root_real))
+    except (ValueError, OSError):
+        return False
+
+
+def is_path_allowed(candidate: str, allowed_roots: tuple[str, ...] | list[str]) -> bool:
+    """Check a candidate directory against allowed roots canonically.
+
+    Args:
+        candidate: Requested directory path.
+        allowed_roots: Configured root directories.
+
+    Returns:
+        True when the canonical candidate equals or sits below any root.
+    """
+    candidate_real = _realpath_str(candidate)
+    for root in allowed_roots:
+        if _is_within_root(candidate_real, _realpath_str(root)):
+            return True
+    return False
+
+
+def _parse_allowed_directories(raw: str | None, normalized_default: str) -> tuple[str, ...]:
+    """Parse ALLOWED_DIRECTORIES, defaulting to the default directory.
+
+    Args:
+        raw: Raw env value, or None when the variable is unset.
+        normalized_default: Normalized default directory.
+
+    Returns:
+        Tuple of allowed root directories (absolute, expanded).
+
+    Raises:
+        RuntimeError: If explicitly configured roots are empty, or the
+            normalized default is not within them (fail closed).
+    """
+    if raw is None:
+        return (normalized_default,)
+    if not raw.strip():
+        raise RuntimeError(
+            "Invalid ALLOWED_DIRECTORIES: must list at least one directory, "
+            "or unset it to default to DEFAULT_DIRECTORY"
+        )
+    roots: list[str] = []
+    for entry in raw.split(","):
+        cleaned = entry.strip()
+        if not cleaned:
+            continue
+        roots.append(_normalize_dir(cleaned, normalized_default))
+    if not roots:
+        raise RuntimeError(
+            "Invalid ALLOWED_DIRECTORIES: must list at least one directory, "
+            "or unset it to default to DEFAULT_DIRECTORY"
+        )
+    default_real = _realpath_str(normalized_default)
+    allowed = False
+    for root in roots:
+        if _is_within_root(default_real, _realpath_str(root)):
+            allowed = True
+            break
+    if not allowed:
+        raise RuntimeError(
+            "Invalid configuration: DEFAULT_DIRECTORY is not within ALLOWED_DIRECTORIES"
+        )
+    return tuple(roots)
 
 
 def _required(name: str) -> str:
@@ -102,6 +222,10 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         exec_max_chars = int(os.environ.get("EXEC_MAX_OUTPUT_CHARS", "20000"))
     except ValueError as exc:
         raise RuntimeError(f"Invalid numeric setting: {exc}") from exc
+    normalized_default = _normalize_dir(
+        os.environ.get("DEFAULT_DIRECTORY"), os.path.expanduser("~")
+    )
+    allowed = _parse_allowed_directories(os.environ.get("ALLOWED_DIRECTORIES"), normalized_default)
     return Settings(
         opencode_base_url=os.environ.get("OPENCODE_BASE_URL", "http://127.0.0.1:4096").rstrip("/"),
         opencode_username=os.environ.get("OPENCODE_SERVER_USERNAME", "opencode"),
@@ -109,7 +233,8 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         mcp_bearer_token=_required("MCP_BEARER_TOKEN"),
         mcp_host=os.environ.get("MCP_HOST", "127.0.0.1"),
         mcp_port=mcp_port,
-        default_directory=os.environ.get("DEFAULT_DIRECTORY", os.path.expanduser("~")),
+        default_directory=normalized_default,
+        allowed_directories=allowed,
         default_provider_id=os.environ.get("DEFAULT_PROVIDER_ID", "opencode"),
         default_model_id=os.environ.get("DEFAULT_MODEL_ID", "muse-spark-1.3-contributor-free"),
         exec_timeout_s=exec_timeout,
