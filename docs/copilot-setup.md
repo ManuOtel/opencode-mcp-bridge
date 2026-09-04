@@ -95,17 +95,22 @@ This bridge uses Bearer token authentication. It does not use OAuth in this path
 
 ### Procedure: connect the bridge as an MCP tool
 
+Use the MCP onboarding wizard (recommended path in the Microsoft guide).
+
 1. Sign in to Copilot Studio and open your agent.
-2. Open the Tools page for the agent.
-3. Select Add a tool, then select Model Context Protocol.
-4. Enter a short name for the server, for example `opencode-bridge`.
-5. Enter a one-sentence description, for example `Run background coding tasks on my own OpenCode bridge`.
-6. Enter the Server URL with your own bridge address, for example `https://<your-domain>/worker-mcp`.
-7. Select API key authentication with header type.
-8. Set the header name to `Authorization`.
-9. Set the header value to `Bearer <paste-your-own-token-here>`.
-10. Select Create, then select Add to agent.
-11. Verify that the tool list shows the five `worker_*` tools.
+2. Go to the Tools page for your agent.
+3. Select Add a tool.
+4. Select New tool.
+5. Select Model Context Protocol. The MCP onboarding wizard appears.
+6. Fill in Server name, for example `opencode-bridge`.
+7. Fill in Server description, for example `Run background coding tasks on my own OpenCode bridge`.
+8. Fill in Server URL with your own bridge address, for example `https://<your-domain>/worker-mcp`.
+9. Select API key as the authentication type.
+10. Select Header as the Type of API key.
+11. Enter `Authorization` as the header name.
+12. Select Create. The Add tool dialog appears.
+13. Select Create a new connection for your MCP server, then select Add to agent.
+14. Verify that the tool list shows the five `worker_*` tools.
 
 Notes:
 
@@ -115,19 +120,16 @@ Notes:
 
 ## Case 3: Microsoft 365 Copilot
 
-Microsoft 365 Copilot has no one-command personal plugin install for this bridge. Access normally requires one of two routes.
+Microsoft 365 Copilot has no one-command personal plugin install for this bridge. The linked Microsoft docs describe two agent approaches: declarative agents and custom engine agents.
 
-- A declarative agent or a custom engine agent that your organization approves.
-- A Copilot Studio agent that is published to your organization catalog.
+A common route is a Copilot Studio agent that is published to your organization catalog. Per the Microsoft agents admin guide, publication to the organization catalog involves admin review and approval in Copilot Control System. Availability to users then depends on tenant policies and the channels selected for the agent. This repo cannot grant those approvals.
 
-An administrator must approve the requested agent in the Microsoft 365 admin center before users can install it. Users then find the approved agent in Teams or in the Microsoft Copilot app. Publication, approval, and data policy controls belong to the organization tenant. This repo cannot grant them.
-
-If you need this route, build a Copilot Studio agent per Case 2 above. Then publish that agent to your organization catalog and ask an administrator to approve it.
+If you need this route, build a Copilot Studio agent per Case 2 above. Then follow the Microsoft publish and admin approval path for your organization.
 
 ## Official documentation
 
-- GitHub: Configure MCP servers for your repository. See `https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/configure-mcp-servers`.
-- Microsoft Copilot Studio: Connect your agent to an existing MCP server. See `https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-add-existing-server-to-agent`.
-- Microsoft Copilot Studio: Add an MCP server to your agent as a tool. See `https://learn.microsoft.com/en-us/microsoft-copilot-studio/agents-experience/tools-add-mcp-server`.
-- Microsoft 365 Copilot: Agents overview (declarative agents and custom engine agents). See `https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/agents-overview`.
-- Microsoft 365 Copilot: Agents admin guide (approval and governance). See `https://learn.microsoft.com/en-us/copilot/microsoft-365/agent-essentials/m365-agents-admin-guide`.
+- [GitHub: Configure MCP servers for your repository](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/configure-mcp-servers).
+- [Microsoft Copilot Studio: Connect your agent to an existing MCP server](https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-add-existing-server-to-agent).
+- [Microsoft Copilot Studio: Add an MCP server to your agent as a tool](https://learn.microsoft.com/en-us/microsoft-copilot-studio/agents-experience/tools-add-mcp-server).
+- [Microsoft 365 Copilot: Agents overview (declarative agents and custom engine agents)](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/agents-overview).
+- [Microsoft 365 Copilot: Agents admin guide (approval and governance)](https://learn.microsoft.com/en-us/copilot/microsoft-365/agent-essentials/m365-agents-admin-guide).
