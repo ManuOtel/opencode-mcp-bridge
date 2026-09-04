@@ -1,5 +1,9 @@
 # Example compose. Replace mcp.example.com with your domain and fill .env.
 # Note: in Docker, exec_run runs inside this container, not on the host.
+# It stays opt-in via ENABLE_EXEC_RUN in .env and runs as the non-root
+# bridge user from the image, which reduces blast radius versus root.
+# TLS terminates upstream (Traefik/edge). The origin here is plain HTTP
+# bound to loopback only; do not publish it to 0.0.0.0 or expose extra ports.
 services:
   bridge:
     build: .
@@ -13,6 +17,17 @@ services:
     environment:
       MCP_HOST: "0.0.0.0"
       MCP_PORT: "8087"
+      TASK_STATE_PATH: "/var/lib/opencode-mcp-bridge/tasks.json"
+    volumes:
+      - opencode-mcp-tasks:/var/lib/opencode-mcp-bridge
+    tmpfs:
+      - /tmp
+      - /home/bridge/.cache
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -27,3 +42,6 @@ services:
       - "traefik.http.routers.opencode-mcp-http.rule=Host(`mcp.example.com`)"
       - "traefik.http.routers.opencode-mcp-http.priority=40"
       - "traefik.http.services.opencode-mcp.loadbalancer.server.port=8087"
+
+volumes:
+  opencode-mcp-tasks:

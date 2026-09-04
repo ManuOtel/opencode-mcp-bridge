@@ -1,6 +1,15 @@
 # Example Traefik file-provider route for host-mode deploys (bridge as a
 # systemd service on the host, Traefik in Docker). TLS terminates at your
-# edge (Cloudflare, LetsEncrypt, ...); origin here is plain HTTP.
+# edge (Cloudflare, LetsEncrypt, ...); this file defines the ORIGIN-only
+# plain-HTTP route behind that edge. It is NOT Internet-safe on its own:
+# clients must reach the edge over HTTPS, and only the edge forwards here.
+# Do not expose this http entryPoint to the Internet without an upstream
+# TLS router plus redirect.
+#
+# exec_run on the bridge stays opt-in (ENABLE_EXEC_RUN=false by default);
+# running the bridge as a non-root user reduces its blast radius but does
+# not sandbox a shell. Bearer auth is enforced by the bridge itself;
+# Traefik here adds only transport routing plus a low-risk rate limit.
 #
 # NOTE: the backend URL must be reachable FROM the Traefik container.
 # 127.0.0.1 would be Traefik itself. Use either:
@@ -10,12 +19,19 @@
 #     with MCP_HOST set to that IP and firewall rules allowing the proxy.
 http:
   routers:
-    opencode-mcp:
+    opencode-mcp-origin:
       entryPoints:
         - http
       service: opencode-mcp
       rule: Host(`mcp.example.com`)
       priority: 40
+      middlewares:
+        - opencode-mcp-ratelimit
+  middlewares:
+    opencode-mcp-ratelimit:
+      rateLimit:
+        average: 30
+        burst: 60
   services:
     opencode-mcp:
       loadBalancer:
