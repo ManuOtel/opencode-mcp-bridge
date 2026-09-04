@@ -128,8 +128,8 @@ Primary worker tools:
 | `worker_run` | Start a background worker (create session + async prompt). Returns compact `taskID` (= session ID), state, model, directory, title, `requestID`, `deduplicated`. Optional `requestID` makes retries idempotent. |
 | `worker_status` | Poll state (`running`/`idle`/`error`/`unknown`) plus latest assistant text only, with truncation counts and bounded `directory` (recovered when omitted). |
 | `worker_catalog` | List models, free + connected only by default, with bridge defaults. |
-| `worker_verify` | Re-check a finished worker (state + evidence), read-only. Part of the 0.2.0 worker API; lands via the companion branch if absent here. |
-| `worker_cleanup` | Abort (`action=abort`) or delete (`action=delete`) a worker session. Prompts before running. Part of the 0.2.0 worker API; lands via the companion branch if absent here (use `abort_session` / `delete_session` in full profile meanwhile). |
+| `worker_verify` | Re-check a finished worker (state + evidence), read-only. Part of the 0.2.0 worker API. |
+| `worker_cleanup` | Abort (`action=abort`) or delete (`action=delete`) a worker session. Prompts before running. Part of the 0.2.0 worker API (`abort_session` / `delete_session` remain the full-profile equivalents). |
 
 Session and utility tools:
 
