@@ -31,6 +31,7 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "MCP_HOST",
         "MCP_PORT",
         "DEFAULT_DIRECTORY",
+        "ALLOWED_DIRECTORIES",
         "DEFAULT_PROVIDER_ID",
         "DEFAULT_MODEL_ID",
         "EXEC_TIMEOUT_S",
