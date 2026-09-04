@@ -2,7 +2,7 @@
 # Runs as non-root user bridge. exec_run stays opt-in via ENABLE_EXEC_RUN
 # and, when enabled, runs inside this container as bridge, which reduces
 # its blast radius versus root but is still a real shell.
-FROM python:3.13-slim AS base
+FROM python:3.14-slim AS base
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
