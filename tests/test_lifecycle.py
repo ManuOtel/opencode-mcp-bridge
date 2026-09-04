@@ -176,6 +176,139 @@ def test_run_git_preserves_leading_whitespace(tmp_path: Path) -> None:
     assert out.splitlines()[0].startswith(" M")
 
 
+def test_run_git_scopes_safe_directory_per_invocation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every git call carries exactly the inspected directory, never * or global."""
+    seen: list[tuple[str, ...]] = []
+
+    class _Proc:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_exec(*argv: str, **kwargs: Any) -> _Proc:
+        seen.append(tuple(argv))
+        return _Proc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+    repo = str(tmp_path)
+    allowed = [
+        ["status", "--short"],
+        ["diff", "--stat"],
+        ["diff", "--check"],
+        ["diff", "--name-only"],
+        ["log", "-1", "--oneline"],
+    ]
+    for args in allowed:
+        code, _ = asyncio.run(server._run_git(repo, args))
+        assert code == 0
+    assert len(seen) == len(allowed)
+    for argv, args in zip(seen, allowed):
+        assert argv[0] == "git"
+        assert argv[1] == "-c"
+        assert argv[2] == f"safe.directory={repo}"
+        assert argv[3] == "-C"
+        assert argv[4] == repo
+        assert list(argv[5:]) == args
+        assert "safe.directory=*" not in argv
+        assert "--global" not in argv
+        assert "--system" not in argv
+        assert "config" not in argv
+
+
+def test_run_git_rejects_caller_provided_commands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Only the fixed verification tuples run; anything else is refused."""
+    called: list[tuple[str, ...]] = []
+
+    async def _boom(*argv: str, **kwargs: Any) -> Any:
+        called.append(tuple(argv))
+        raise AssertionError("must not spawn git for unsupported args")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _boom)
+    for bad in (
+        ["config", "--global", "--add", "safe.directory", "*"],
+        ["log", "--all", "--oneline"],
+        ["status"],
+        ["diff", "--no-index", "/etc/passwd", "/etc/shadow"],
+        ["-c", "protocol.allow=always", "status", "--short"],
+    ):
+        code, out = asyncio.run(server._run_git(str(tmp_path), bad))
+        assert code is None
+        assert out == "unsupported git arguments"
+    assert called == []
+
+
+def test_verify_survives_dubious_ownership_when_scoped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Simulated cross-UID checkout fails without scope, passes with it."""
+    fake = _patch(monkeypatch)
+    fake.status_map = {"ses_1": {"type": "idle"}}
+    fake.latest = {"messageID": "m1", "text": "done", "total_chars": 4, "has_error": False}
+    repo = _git_repo(tmp_path)
+    target = str(repo)
+    seen: list[tuple[str, ...]] = []
+    outputs = {
+        ("status", "--short"): (0, " M a.txt\n", ""),
+        ("diff", "--stat"): (0, " a.txt | 1 +\n", ""),
+        ("diff", "--check"): (0, "", ""),
+        ("diff", "--name-only"): (0, "a.txt\n", ""),
+        ("log", "-1", "--oneline"): (0, "abc1234 init\n", ""),
+    }
+
+    class _Proc:
+        def __init__(self, code: int, out: bytes, err: bytes) -> None:
+            self.returncode = code
+            self._out = out
+            self._err = err
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return self._out, self._err
+
+    async def _fake_exec(*argv: str, **kwargs: Any) -> _Proc:
+        seen.append(tuple(argv))
+        scoped = f"safe.directory={target}" in argv
+        sub = tuple(argv[5:])
+        if not scoped:
+            msg = "fatal: detected dubious ownership in repository"
+            return _Proc(128, b"", msg.encode())
+        code, out, err = outputs.get(sub, (128, "", "unknown"))
+        return _Proc(code, out.encode(), err.encode())
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+    before = subprocess.run(
+        ["git", "config", "--global", "--get-all", "safe.directory"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    bundle = asyncio.run(server._collect_verification(target))
+    after = subprocess.run(
+        ["git", "config", "--global", "--get-all", "safe.directory"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert bundle["ok"] is True
+    assert bundle["error"] is None
+    assert "a.txt" in bundle["status_short"]
+    assert bundle["changed_files"] == ["a.txt"]
+    assert bundle["latest_commit"] == "abc1234 init"
+    assert len(bundle["status_short"]) <= server.WORKER_VERIFY_GIT_MAX_CHARS
+    assert len(seen) == len(outputs)
+    for argv in seen:
+        assert f"safe.directory={target}" in argv
+        assert "safe.directory=*" not in argv
+        assert "--global" not in argv
+        assert "config" not in argv[5:]
+    assert before.stdout == after.stdout
+    assert before.returncode == after.returncode
+
+
 def test_parse_status_files_exact_columns() -> None:
     """Two status columns parse positionally, renames resolve to new path."""
     raw = " M a.txt\nM  b.txt\n?? c.txt\nR  old.txt -> new.txt\n"

@@ -587,20 +587,44 @@ def _bound_text(value: Any, cap: int) -> str:
     return text[:cap]
 
 
+_GIT_ALLOWED_ARGS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("status", "--short"),
+        ("diff", "--stat"),
+        ("diff", "--check"),
+        ("diff", "--name-only"),
+        ("log", "-1", "--oneline"),
+    }
+)
+
+
 async def _run_git(directory: str, args: list[str]) -> tuple[int | None, str]:
     """Run one fixed git command without a shell.
+
+    Each invocation carries a narrowly scoped ``-c safe.directory=<dir>``
+    entry so repositories owned by another UID (for example the human user
+    when the bridge runs as the ``opencode-mcp`` service account) do not
+    fail with Git's "dubious ownership" error. The scope is exactly the
+    inspected directory: never ``*``, never a global/system config write,
+    and never caller-provided commands (``args`` must be one of the fixed
+    verification tuples).
 
     Args:
         directory: Repository directory passed as git -C target.
         args: Fixed git subcommand arguments (never caller-provided commands).
 
     Returns:
-        Tuple of exit code (None on spawn/timeout failure) and bounded output
-        combining stdout and stderr.
+        Tuple of exit code (None on spawn/timeout failure or rejected
+        arguments) and bounded output combining stdout and stderr.
     """
+    if tuple(args) not in _GIT_ALLOWED_ARGS:
+        return None, "unsupported git arguments"
+    safe_value = f"safe.directory={directory}"
     try:
         process = await asyncio.create_subprocess_exec(
             "git",
+            "-c",
+            safe_value,
             "-C",
             directory,
             *args,
@@ -657,6 +681,8 @@ async def _collect_verification(directory: str) -> dict[str, Any]:
     """Collect a bounded read-only git verification bundle.
 
     Runs only fixed git arguments via create_subprocess_exec, never a shell.
+    Each git call carries a narrowly scoped ``-c safe.directory=<dir>`` so
+    cross-UID checkouts verify without any global safe.directory change.
 
     Args:
         directory: Repository directory to inspect.
@@ -1561,7 +1587,8 @@ async def worker_verify(
     """Verify a worker: bounded latest output plus a read-only git bundle.
 
     Never runs caller-provided commands. Git inspection uses only fixed
-    arguments via asyncio.create_subprocess_exec, never a shell.
+    arguments via asyncio.create_subprocess_exec, never a shell, each with
+    a narrowly scoped ``-c safe.directory`` for the inspected directory.
 
     Args:
         taskID: Task ID from worker_run (the session ID).
