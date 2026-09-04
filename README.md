@@ -277,7 +277,8 @@ git diff --check
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same checks on pull requests and
-pushes to master, plus JSON validation of the Codex and Claude plugin manifests.
+pushes to master across Python 3.11, 3.12, and 3.13, plus JSON validation
+of the Codex and Claude plugin manifests and a no-push Docker build.
 
 ## Community
 

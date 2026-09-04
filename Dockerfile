@@ -12,11 +12,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-editable
 
 COPY src ./src
-COPY README.md ./
 
 # Non-root app user plus state dir for the default
 # TASK_STATE_PATH=/var/lib/opencode-mcp-bridge/tasks.json.

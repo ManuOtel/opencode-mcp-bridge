@@ -93,7 +93,8 @@ git diff --check
 
 CI (`.github/workflows/ci.yml`) runs the same verification on pull requests
 and on pushes to `master`.
-CI tests Python 3.11 and 3.12.
+CI tests Python 3.11, 3.12, and 3.13.
+CI also builds the Docker image (`Dockerfile`) without pushing it.
 CI also verifies JSON manifests with `python3 -m json.tool` for these files:
 
 - `.codex-plugin/plugin.json`
