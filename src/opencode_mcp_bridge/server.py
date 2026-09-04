@@ -3,7 +3,8 @@
 Transport: Streamable HTTP at POST /mcp (full 16-tool catalog, stateless)
 and POST /worker-mcp (five worker_* tools only, stateless). Works with
 ChatGPT, Claude Code, Codex, and other MCP-compatible harnesses.
-Auth: static Bearer token on every /mcp and /worker-mcp request;
+Auth: static Bearer token on every /mcp and /worker-mcp request, with an
+optional secondary rotation token for overlap (see README rotation steps);
 Basic auth to opencode. Health: GET /health is open (reverse-proxy checks).
 
 Run:
@@ -30,7 +31,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from opencode_mcp_bridge import observability
-from opencode_mcp_bridge.config import Settings, _realpath_str, load_settings
+from opencode_mcp_bridge.config import (
+    Settings,
+    _realpath_str,
+    accepted_bearer_tokens,
+    load_settings,
+)
 from opencode_mcp_bridge.config import _is_within_root as _within_root
 from opencode_mcp_bridge.opencode_client import OpencodeClient, OpencodeError
 
@@ -1828,17 +1834,58 @@ class BearerAuthMiddleware:
     Covers both /mcp (full catalog) and /worker-mcp (worker-only catalog).
     Only GET/HEAD on normalized /health (/health/) bypass auth; every
     other method on health and every MCP route requires the token.
+    Accepts one primary token plus an optional secondary rotation token;
+    every candidate is compared with hmac.compare_digest (no early exit)
+    and validation fails closed. Token values are never logged.
     """
 
-    def __init__(self, app: Any, token: str) -> None:
+    def __init__(
+        self,
+        app: Any,
+        token: str | list[str] | tuple[str, ...],
+        extra_tokens: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
         """Create the middleware.
 
         Args:
             app: Downstream ASGI app.
-            token: Expected Bearer token.
+            token: Expected Bearer token, or the full accepted list for
+                rotation (primary first). Kept as a single positional
+                arg for backward compatibility.
+            extra_tokens: Optional extra accepted tokens (e.g. secondary
+                rotation token). Ignored when token is already a list.
         """
+        if isinstance(token, (list, tuple)):
+            accepted = [t for t in token if isinstance(t, str) and t.strip()]
+        else:
+            accepted = [token] if isinstance(token, str) and token.strip() else []
+            for candidate in extra_tokens or ():
+                if isinstance(candidate, str) and candidate.strip():
+                    accepted.append(candidate.strip())
+        if not accepted:
+            raise RuntimeError("Bearer auth misconfigured: no tokens available")
         self.app = app
-        self._expected = token.encode()
+        self._expected_tokens: tuple[bytes, ...] = tuple(t.encode() for t in accepted)
+
+    def _is_authorized(self, presented: bytes) -> bool:
+        """Compare a presented token against all accepted tokens.
+
+        Every candidate runs through hmac.compare_digest with no early
+        exit, so accept/reject timing does not reveal which slot matched.
+
+        Args:
+            presented: Raw token bytes from the Authorization header.
+
+        Returns:
+            True when any accepted token matches.
+        """
+        if not presented:
+            return False
+        matched = False
+        for expected in self._expected_tokens:
+            if hmac.compare_digest(presented, expected):
+                matched = True
+        return matched
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         """Check auth for HTTP requests, pass through lifespan/websocket.
@@ -1859,7 +1906,7 @@ class BearerAuthMiddleware:
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
         auth = headers.get(b"authorization", b"")
         scheme, _, presented = auth.partition(b" ")
-        if scheme.lower() != b"bearer" or not hmac.compare_digest(presented, self._expected):
+        if scheme.lower() != b"bearer" or not self._is_authorized(presented):
             observability.emit(
                 event=observability.EVENT_AUTH,
                 tool=observability.TOOL_AUTH,
@@ -1932,7 +1979,7 @@ def create_app() -> Any:
         middleware=merged_middleware,
         lifespan=combined_lifespan,
     )
-    return BearerAuthMiddleware(outer, settings.mcp_bearer_token)
+    return BearerAuthMiddleware(outer, accepted_bearer_tokens(settings))
 
 
 def main() -> None:

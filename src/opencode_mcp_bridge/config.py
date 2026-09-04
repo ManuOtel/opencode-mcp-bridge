@@ -10,6 +10,7 @@ Usage:
 
 from __future__ import annotations
 
+import hmac
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,7 @@ class Settings:
     opencode_username: str
     opencode_password: str
     mcp_bearer_token: str
+    mcp_bearer_token_secondary: str | None
     mcp_host: str
     mcp_port: int
     default_directory: str
@@ -203,6 +205,50 @@ def _required(name: str) -> str:
     return value
 
 
+def _optional_secondary_token(name: str, primary: str) -> str | None:
+    """Return an optional rotation token or raise fail-closed on misuse.
+
+    Unset means single-token mode (fully backward compatible). When set,
+    the value must be non-blank and must differ from the primary token;
+    an identical or blank value is a misconfiguration, never silently
+    accepted or ignored.
+
+    Args:
+        name: Environment variable name for the secondary token.
+        primary: Already-validated primary token value.
+
+    Returns:
+        Stripped secondary token, or None when the variable is unset.
+
+    Raises:
+        RuntimeError: If the variable is set-but-blank or duplicates
+            the primary. Messages carry names only, never token values.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        raise RuntimeError(f"Invalid {name}: set but empty; unset it or set a token")
+    if hmac.compare_digest(cleaned.encode(), primary.encode()):
+        raise RuntimeError(f"Invalid {name}: must differ from MCP_BEARER_TOKEN")
+    return cleaned
+
+
+def accepted_bearer_tokens(settings: Settings) -> tuple[str, ...]:
+    """Return every accepted bearer token (primary first, then secondary).
+
+    Args:
+        settings: Loaded Settings.
+
+    Returns:
+        Tuple of accepted token values (1 or 2 entries).
+    """
+    if settings.mcp_bearer_token_secondary:
+        return (settings.mcp_bearer_token, settings.mcp_bearer_token_secondary)
+    return (settings.mcp_bearer_token,)
+
+
 def load_settings(dotenv_path: Path | None = None) -> Settings:
     """Load settings from environment, optionally reading a .env file first.
 
@@ -226,11 +272,14 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         os.environ.get("DEFAULT_DIRECTORY"), os.path.expanduser("~")
     )
     allowed = _parse_allowed_directories(os.environ.get("ALLOWED_DIRECTORIES"), normalized_default)
+    primary_token = _required("MCP_BEARER_TOKEN")
+    secondary_token = _optional_secondary_token("MCP_BEARER_TOKEN_SECONDARY", primary_token)
     return Settings(
         opencode_base_url=os.environ.get("OPENCODE_BASE_URL", "http://127.0.0.1:4096").rstrip("/"),
         opencode_username=os.environ.get("OPENCODE_SERVER_USERNAME", "opencode"),
         opencode_password=_required("OPENCODE_SERVER_PASSWORD"),
-        mcp_bearer_token=_required("MCP_BEARER_TOKEN"),
+        mcp_bearer_token=primary_token,
+        mcp_bearer_token_secondary=secondary_token,
         mcp_host=os.environ.get("MCP_HOST", "127.0.0.1"),
         mcp_port=mcp_port,
         default_directory=normalized_default,

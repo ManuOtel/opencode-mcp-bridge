@@ -200,6 +200,17 @@ Session and utility tools:
 - Treat `MCP_BEARER_TOKEN` like a root password: long random value
   (`python3 -c "import secrets; print(secrets.token_urlsafe(48))"`), rotate on leak,
   never commit `.env`.
+- Token rotation (zero downtime): `MCP_BEARER_TOKEN_SECONDARY` accepts one
+  extra token during overlap. Steps: 1) generate a new token, 2) set it as
+  `MCP_BEARER_TOKEN_SECONDARY` and restart/reload the bridge, 3) move
+  clients to the new token, 4) promote it to `MCP_BEARER_TOKEN`, unset the
+  secondary, restart. Blank or duplicate secondary values fail startup
+  closed. Both tokens share `/mcp` and `/worker-mcp`; comparison is
+  constant-time and token values are never logged.
+- Follow-up (not implemented): request rate limiting. Per-IP limiting would
+  trust spoofable proxy headers and global limiting risks breaking
+  legitimate MCP polling, so no limiter ships here. Revisit behind the
+  reverse proxy if abuse is observed.
 - `exec_run` is opt-in (`ENABLE_EXEC_RUN=true`) and disabled by default.
   When enabled, plus open directories, anyone with the Bearer token has a shell
   where the bridge runs. Prefer session tools for code edits; reserve `exec_run` for
@@ -233,6 +244,7 @@ Check it: `curl http://127.0.0.1:8087/health` should report OpenCode healthy.
 | `OPENCODE_SERVER_USERNAME` | `opencode` | Basic auth user for OpenCode. |
 | `OPENCODE_SERVER_PASSWORD` | (required) | Basic auth password of your OpenCode server. |
 | `MCP_BEARER_TOKEN` | (required) | Static token clients send as `Authorization: Bearer <token>`. |
+| `MCP_BEARER_TOKEN_SECONDARY` | (unset) | Optional overlap token for rotation; unset means single-token mode. |
 | `MCP_HOST` | `127.0.0.1` | Bridge listen address. Use a host IP reachable from your reverse proxy when proxying from Docker. |
 | `MCP_PORT` | `8087` | Bridge listen port. |
 | `DEFAULT_DIRECTORY` | `$HOME` | Working directory for sessions when clients omit it. |
