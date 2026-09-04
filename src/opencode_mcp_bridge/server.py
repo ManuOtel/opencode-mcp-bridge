@@ -99,17 +99,22 @@ def get_client() -> OpencodeClient:
 async def health_check(request: Request) -> Response:
     """Open health endpoint for reverse-proxy checks.
 
+    Unauthenticated by design; returns a minimal safe payload only.
+    Success is 200 {"ok": true} when opencode is reachable, else 503
+    {"ok": false, "error": "unavailable"}. Backend version, URLs,
+    exception text, paths, and credentials are never exposed.
+
     Args:
         request: Starlette request (unused).
 
     Returns:
-        JSON with bridge status and opencode reachability.
+        Minimal JSON liveness response.
     """
     try:
-        info = await get_client().health()
-        return JSONResponse({"ok": True, "opencode": info})
-    except Exception as exc:  # noqa: BLE001 - health must return 503, never raise
-        return JSONResponse({"ok": False, "error": str(exc)[:300]}, status_code=503)
+        await get_client().health()
+        return JSONResponse({"ok": True})
+    except Exception:  # noqa: BLE001 - health must return 503, never raise or leak
+        return JSONResponse({"ok": False, "error": "unavailable"}, status_code=503)
 
 
 @mcp.tool(
