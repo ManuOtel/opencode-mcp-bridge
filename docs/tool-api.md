@@ -25,10 +25,14 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
   atomic unique-temp-file writes, no prompt or credentials); prompt failure
   removes the record and deletes the session best-effort.
 - `worker_status(taskID, directory?, include_output=true, max_output_chars=12000)`:
-  poll state (`running`/`idle`/`error`/`unknown`) plus `messageID` and bounded
-  latest output only, plus bounded `directory`. `/session/status` lists active sessions only, so an
+  poll state (`running`/`idle`/`error`/`unknown`/`stale`) plus `messageID` and bounded
+  latest output only, plus bounded `directory`, plus `stale`, bounded `stale_reason`
+  (elapsed/limit seconds only), and `recovery_hint`. `/session/status` lists active sessions only, so an
   absent entry with a completed assistant message infers `idle`; absent with
-  no assistant stays `unknown`. When `directory` is omitted, the saved task
+  no assistant stays `unknown`. A task still `running` with empty output past
+  `TASK_STALE_AFTER_S` (default 600, 60-3600) reports `stale` with recovery
+  needed; tasks with any output, non-running states, skipped output, and
+  legacy records without timestamps never classify stale. When `directory` is omitted, the saved task
   record supplies it.
 - `worker_verify(taskID, directory?, max_output_chars=12000)`: status output plus a
   read-only git bundle (`status --short`, `diff --stat`, `diff --check`
@@ -40,6 +44,11 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
   `delete` aborts best-effort then deletes and reports `aborted` accurately
   (false plus a generic `cleanup_warning` when the pre-delete abort fails).
   Validated before side effects. Successful `delete` removes the task record.
+  `delete` is idempotent: when the session is already gone from OpenCode
+  (404), the record is still removed and `delete` reports success with a
+  generic warning. Only the given `taskID` is ever touched; unrelated
+  sessions are never listed or killed. Stale workers clean up with
+  `worker_cleanup(taskID, directory, action="delete")`.
 
 ## Legacy tools (advanced compatibility)
 

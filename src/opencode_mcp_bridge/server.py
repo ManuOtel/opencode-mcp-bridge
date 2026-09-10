@@ -389,6 +389,12 @@ TASK_TITLE_MAX_CHARS = 200
 TASK_AGENT_MAX_CHARS = 100
 TASK_LOCK_TIMEOUT_S = 10.0
 TASK_LOCK_POLL_S = 0.02
+TASK_STALE_AFTER_DEFAULT_S = 600
+TASK_STALE_REASON_MAX_CHARS = 200
+WORKER_STALE_RECOVERY_HINT = (
+    "Stale worker: running with empty output past the startup timeout. "
+    "Run worker_cleanup action=delete for this taskID only."
+)
 
 _TASK_LOCK: asyncio.Lock | None = None
 _TASK_LOCK_LOOP: Any = None
@@ -1134,6 +1140,7 @@ def _build_task_record(
     agent: Any,
     provider_id: str,
     model_id: str,
+    created_at: float | None = None,
 ) -> dict[str, Any]:
     """Build a bounded record with no prompt, secrets, or credentials.
 
@@ -1147,6 +1154,8 @@ def _build_task_record(
         agent: Optional agent.
         provider_id: Resolved provider.
         model_id: Resolved model.
+        created_at: Epoch seconds for stale classification. Defaults to now.
+            Legacy records without this field are never classified stale.
 
     Returns:
         Bounded record dict safe for JSON persistence.
@@ -1163,6 +1172,7 @@ def _build_task_record(
         "agent": agent_text,
         "providerID": provider_id,
         "modelID": model_id,
+        "created_at": created_at if created_at is not None else time.time(),
     }
 
 
@@ -1184,6 +1194,92 @@ def _remove_task_record(task_id: str) -> None:
     if task_id in tasks:
         del tasks[task_id]
         _save_task_state(tasks)
+
+
+def _task_stale_after_s() -> int:
+    """Return the bounded startup/progress timeout for stale classification.
+
+    Reads the configured TASK_STALE_AFTER_S via settings; falls back to
+    the compiled default when settings are unavailable (e.g. missing env
+    in unit tests). Never raises.
+
+    Returns:
+        Timeout in seconds, always positive and bounded.
+    """
+    try:
+        value = get_settings().task_stale_after_s
+    except RuntimeError:
+        return TASK_STALE_AFTER_DEFAULT_S
+    if isinstance(value, bool) or not isinstance(value, int):
+        return TASK_STALE_AFTER_DEFAULT_S
+    if value <= 0:
+        return TASK_STALE_AFTER_DEFAULT_S
+    return value
+
+
+def _task_age_s(record: dict[str, Any] | None, now: float | None = None) -> float | None:
+    """Return the age of a task record in seconds, or None when unknown.
+
+    Legacy records without a numeric created_at are never classified
+    stale, preserving backward compatibility.
+
+    Args:
+        record: Stored task record or None.
+        now: Epoch seconds override for deterministic tests.
+
+    Returns:
+        Age in seconds (>= 0), or None when the record has no usable timestamp.
+    """
+    if not isinstance(record, dict):
+        return None
+    created = record.get("created_at")
+    if isinstance(created, bool) or not isinstance(created, (int, float)):
+        return None
+    current = now if now is not None else time.time()
+    try:
+        age = float(current) - float(created)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if age < 0:
+        return 0.0
+    return age
+
+
+def _classify_task_stale(
+    record: dict[str, Any] | None,
+    state: str,
+    has_output: bool,
+    include_output: bool,
+    now: float | None = None,
+) -> tuple[bool, str | None]:
+    """Classify a running worker with empty output as stale when overdue.
+
+    Only state == running with no assistant output and output actually
+    fetched counts; idle/error/unknown and tasks with any output are
+    never stale. Records without timestamps (legacy) are never stale.
+    The reason carries only elapsed/limit seconds, never prompts, paths,
+    tokens, or backend text.
+
+    Args:
+        record: Stored task record or None.
+        state: Mapped worker state before staleness.
+        has_output: True when any assistant output exists.
+        include_output: False means output was not fetched, so no claim.
+        now: Epoch seconds override for deterministic tests.
+
+    Returns:
+        Tuple of (is_stale, bounded reason or None).
+    """
+    if not include_output or state != "running" or has_output:
+        return False, None
+    age = _task_age_s(record, now)
+    if age is None:
+        return False, None
+    limit = _task_stale_after_s()
+    if age < limit:
+        return False, None
+    reason = f"running with empty output for {int(age)}s (limit {int(limit)}s); recovery needed"
+    return True, _bound_text(reason, TASK_STALE_REASON_MAX_CHARS)
 
 
 @mcp.tool(
@@ -1414,6 +1510,9 @@ async def worker_status(
     Pass the directory returned by worker_run when it differs from the
     configured default: status and messages are directory-scoped. When
     directory is omitted, the saved task record is used to recover it.
+    A worker that stays running with empty output past TASK_STALE_AFTER_S
+    is classified stale with a bounded reason and a recovery hint;
+    clean it with worker_cleanup action=delete for this taskID only.
 
     Args:
         taskID: Task ID from worker_run (the session ID).
@@ -1423,12 +1522,14 @@ async def worker_status(
 
     Returns:
         Compact dict with taskID, sessionID, state
-        (running/idle/error/unknown), raw status, messageID, latest output
-        only, output_chars, total_chars, truncated_chars, a truncated
-        flag, and directory. Only output text is bounded; directory paths
-        are returned exactly as requested or saved. Never dumps full
-        history. GET /session/status contains active sessions only, so an
-        absent raw status with a non-null assistant messageID and no
+        (running/idle/error/unknown/stale), raw status, messageID, latest
+        output only, output_chars, total_chars, truncated_chars, a truncated
+        flag, directory, plus stale, stale_reason, and recovery_hint.
+        Only output text is bounded; directory paths are returned exactly
+        as requested or saved. stale_reason carries elapsed/limit seconds
+        only, never prompts, paths, tokens, or backend text. Never dumps
+        full history. GET /session/status contains active sessions only, so
+        an absent raw status with a non-null assistant messageID and no
         assistant error infers idle; absent status with no assistant stays
         unknown.
     """
@@ -1449,6 +1550,14 @@ async def worker_status(
             authorized = _authorize_directory(directory)
             effective_query = authorized
             effective_dir = authorized
+            # Best-effort staleness metadata only: explicit directories must
+            # keep working even when the registry is corrupt, so registry
+            # errors here never fail the status call.
+            stale_record: dict[str, Any] | None = None
+            with suppress(Exception):
+                stale_record = _load_task_state().get(taskID)
+                if not isinstance(stale_record, dict):
+                    stale_record = None
         elif saved and saved.get("directory"):
             saved_dir = saved.get("directory")
             if not isinstance(saved_dir, str) or not saved_dir.strip():
@@ -1456,9 +1565,11 @@ async def worker_status(
             else:
                 effective_dir = _authorize_directory(saved_dir)
             effective_query = effective_dir
+            stale_record = saved if isinstance(saved, dict) else None
         else:
             effective_dir = _authorize_optional_directory(None)
             effective_query = effective_dir
+            stale_record = saved if isinstance(saved, dict) else None
         cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
         statuses = await client.get_session_status(effective_query)
         raw = statuses.get(taskID) if isinstance(statuses, dict) else None
@@ -1486,6 +1597,11 @@ async def worker_status(
             else:
                 output = text
             output_chars = len(output) if output is not None else 0
+        has_output = bool(message_id) or total_chars > 0
+        stale, stale_reason = _classify_task_stale(stale_record, state, has_output, include_output)
+        if stale:
+            state = "stale"
+        recovery_hint = WORKER_STALE_RECOVERY_HINT if stale else None
         _obs_result = {
             "taskID": taskID,
             "sessionID": taskID,
@@ -1498,6 +1614,9 @@ async def worker_status(
             "truncated_chars": truncated_chars,
             "truncated": truncated,
             "directory": effective_dir,
+            "stale": stale,
+            "stale_reason": stale_reason,
+            "recovery_hint": recovery_hint,
         }
         observability.emit(
             event=observability.EVENT_WORKER,
@@ -1958,7 +2077,12 @@ async def worker_cleanup(
 ) -> dict[str, Any]:
     """Clean up a worker with an explicit abort or delete action.
 
-    All arguments are validated before any side effect runs.
+    All arguments are validated before any side effect runs. Delete is
+    idempotent: when the session is already gone from OpenCode (HTTP 404
+    on abort or delete), the task record is still removed and delete
+    reports success with a generic warning, so stale workers clean up
+    safely. Only the given taskID is ever touched; unrelated sessions
+    are never listed or killed.
 
     Args:
         taskID: Task ID from worker_run (the session ID).
@@ -2027,10 +2151,48 @@ async def worker_cleanup(
             )
             return _obs_result
         async with _locked_task_registry():
+            aborted_flag = True
             try:
                 await client.abort_session(taskID, query_dir)
+            except OpencodeError as exc:
+                if exc.status == 404:
+                    # Session already gone: still idempotent, keep going
+                    # to delete (also 404-tolerant) and drop the record.
+                    aborted_flag = False
+                else:
+                    try:
+                        await client.delete_session(taskID, query_dir)
+                    except OpencodeError as del_exc:
+                        if del_exc.status != 404:
+                            raise
+                    _remove_task_record(taskID)
+                    _obs_result = {
+                        "taskID": taskID,
+                        "sessionID": taskID,
+                        "action": "delete",
+                        "aborted": False,
+                        "deleted": True,
+                        "directory": effective_dir,
+                        "cleanup_warning": _bound_text(
+                            "pre-delete abort failed; session deleted",
+                            WORKER_CLEANUP_WARNING_MAX_CHARS,
+                        ),
+                    }
+                    observability.emit(
+                        event=observability.EVENT_WORKER,
+                        tool="worker_cleanup",
+                        outcome=observability.OUTCOME_SUCCEEDED,
+                        duration_ms=observability.duration_ms_since(_obs_start),
+                        task_id=_obs_task,
+                        action="delete",
+                    )
+                    return _obs_result
             except Exception:  # noqa: BLE001 - best-effort abort; outcome via aborted flag
-                await client.delete_session(taskID, query_dir)
+                try:
+                    await client.delete_session(taskID, query_dir)
+                except OpencodeError as del_exc:
+                    if del_exc.status != 404:
+                        raise
                 _remove_task_record(taskID)
                 _obs_result = {
                     "taskID": taskID,
@@ -2053,7 +2215,61 @@ async def worker_cleanup(
                     action="delete",
                 )
                 return _obs_result
-            await client.delete_session(taskID, query_dir)
+            if not aborted_flag:
+                try:
+                    await client.delete_session(taskID, query_dir)
+                except OpencodeError as exc:
+                    if exc.status != 404:
+                        raise
+                _remove_task_record(taskID)
+                _obs_result = {
+                    "taskID": taskID,
+                    "sessionID": taskID,
+                    "action": "delete",
+                    "aborted": False,
+                    "deleted": True,
+                    "directory": effective_dir,
+                    "cleanup_warning": _bound_text(
+                        "session already gone; record removed",
+                        WORKER_CLEANUP_WARNING_MAX_CHARS,
+                    ),
+                }
+                observability.emit(
+                    event=observability.EVENT_WORKER,
+                    tool="worker_cleanup",
+                    outcome=observability.OUTCOME_SUCCEEDED,
+                    duration_ms=observability.duration_ms_since(_obs_start),
+                    task_id=_obs_task,
+                    action="delete",
+                )
+                return _obs_result
+            try:
+                await client.delete_session(taskID, query_dir)
+            except OpencodeError as exc:
+                if exc.status != 404:
+                    raise
+                _remove_task_record(taskID)
+                _obs_result = {
+                    "taskID": taskID,
+                    "sessionID": taskID,
+                    "action": "delete",
+                    "aborted": True,
+                    "deleted": True,
+                    "directory": effective_dir,
+                    "cleanup_warning": _bound_text(
+                        "session already gone; record removed",
+                        WORKER_CLEANUP_WARNING_MAX_CHARS,
+                    ),
+                }
+                observability.emit(
+                    event=observability.EVENT_WORKER,
+                    tool="worker_cleanup",
+                    outcome=observability.OUTCOME_SUCCEEDED,
+                    duration_ms=observability.duration_ms_since(_obs_start),
+                    task_id=_obs_task,
+                    action="delete",
+                )
+                return _obs_result
             _remove_task_record(taskID)
             _obs_result = {
                 "taskID": taskID,
