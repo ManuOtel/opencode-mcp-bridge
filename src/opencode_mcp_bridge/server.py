@@ -9,7 +9,8 @@ Basic auth to opencode. Health: GET /health is open (reverse-proxy checks).
 Discovery: GET /.well-known/oauth-protected-resource (+ /mcp and
 /worker-mcp children) is open RFC 9728 metadata with no secrets and no
 authorization server; 401s on /mcp and /worker-mcp point at it via
-WWW-Authenticate.
+WWW-Authenticate. GET /.well-known/mcp/server-card.json is open static
+metadata for scanners blocked by the auth wall (Smithery fallback).
 
 Run:
     python -m opencode_mcp_bridge.server
@@ -2540,6 +2541,8 @@ def _origin_from_referer(value: str) -> str | None:
 RESOURCE_DOCUMENTATION_URL = "https://github.com/ManuOtel/opencode-mcp-bridge"
 WELL_KNOWN_PREFIX = "/.well-known/oauth-protected-resource"
 MCP_RESOURCE_SUFFIXES = {"": "", "/mcp": "/mcp", "/worker-mcp": "/worker-mcp"}
+SERVER_CARD_PATH = "/.well-known/mcp/server-card.json"
+SERVER_CARD_FALLBACK_VERSION = "0.2.0"
 
 
 def _public_base_url(scope: Any, headers: dict[bytes, bytes]) -> str:
@@ -2691,6 +2694,100 @@ def protected_resource_routes() -> list[Route]:
     ]
 
 
+def _server_card_version() -> str:
+    """Return the bridge version for the static server card.
+
+    Prefers the installed distribution version so the card tracks
+    pyproject; falls back to the release constant when packaging
+    metadata is unavailable (e.g. uninstalled checkout).
+
+    Returns:
+        Version string, never empty.
+    """
+    try:
+        from importlib.metadata import version
+
+        return version("opencode-mcp-bridge")
+    except Exception:  # noqa: BLE001 - fallback keeps discovery working
+        return SERVER_CARD_FALLBACK_VERSION
+
+
+async def _server_card_payload() -> dict[str, Any]:
+    """Build the static Smithery server-card payload from worker tools.
+
+    Lists exactly the five worker_* tools served on /worker-mcp with
+    their live descriptions and JSON input schemas, so the card cannot
+    drift from the real catalog. Never includes exec_run, tokens,
+    credentials, or OAuth claims: auth is a static Bearer token and
+    the bridge operates no authorization server.
+
+    Returns:
+        Server-card dict per Smithery static fallback (SEP-1649 shape).
+    """
+    tools = await worker_mcp.list_tools()
+    entries = []
+    for tool in sorted(tools, key=lambda item: item.name):
+        if tool.name not in WORKER_TOOL_NAMES:
+            continue
+        schema = tool.parameters
+        if not isinstance(schema, dict):
+            schema = {"type": "object"}
+        entries.append(
+            {
+                "name": tool.name,
+                "description": tool.description or "",
+                "inputSchema": schema,
+            }
+        )
+    return {
+        "serverInfo": {"name": "opencode-bridge-worker", "version": _server_card_version()},
+        "authentication": {"required": True, "schemes": ["bearer"]},
+        "tools": entries,
+        "resources": [],
+        "prompts": [],
+    }
+
+
+async def _server_card_handler(request: Request) -> Response:
+    """Serve the unauthenticated static server card for blocked scans.
+
+    Args:
+        request: Starlette request (unused, no secrets read).
+
+    Returns:
+        JSON server-card describing the worker endpoint and its tools.
+    """
+    return JSONResponse(await _server_card_payload())
+
+
+def _is_server_card_path(normalized: str) -> bool:
+    """Check whether a normalized path is the static server-card endpoint.
+
+    Args:
+        normalized: Path with trailing slash stripped (root stays "/").
+
+    Returns:
+        True for the card path with or without a trailing slash.
+    """
+    return normalized == SERVER_CARD_PATH
+
+
+def server_card_routes() -> list[Route]:
+    """Return unauthenticated GET routes for the static server card.
+
+    Covers the exact Smithery path plus a trailing-slash variant so
+    scanners get JSON either way. Only GET/HEAD are served; auth still
+    guards every other method via the middleware bypass rule.
+
+    Returns:
+        List of Starlette routes.
+    """
+    return [
+        Route(SERVER_CARD_PATH, _server_card_handler, methods=["GET", "HEAD"]),
+        Route(SERVER_CARD_PATH + "/", _server_card_handler, methods=["GET", "HEAD"]),
+    ]
+
+
 class BearerAuthMiddleware:
     """ASGI middleware requiring a static Bearer token, except health.
 
@@ -2699,7 +2796,8 @@ class BearerAuthMiddleware:
     other method on health and every MCP route requires the token.
     GET/HEAD on /.well-known/oauth-protected-resource and its /mcp and
     /worker-mcp children also bypass auth (RFC 9728 discovery, no
-    secrets). Accepts one primary token plus an optional secondary
+    secrets). GET/HEAD on /.well-known/mcp/server-card.json also
+    bypasses auth (static Smithery fallback, no secrets). Accepts one primary token plus an optional secondary
     rotation token; every candidate is compared with hmac.compare_digest
     (no early exit) and validation fails closed. Token values are never
     logged. Rejections on /mcp and /worker-mcp carry a Bearer
@@ -2794,6 +2892,12 @@ class BearerAuthMiddleware:
         ):
             await self.app(scope, receive, send)
             return
+        if _is_server_card_path(normalized) and scope.get("method") in (
+            "GET",
+            "HEAD",
+        ):
+            await self.app(scope, receive, send)
+            return
         auth = headers.get(b"authorization", b"")
         scheme, _, presented = auth.partition(b" ")
         if scheme.lower() != b"bearer" or not self._is_authorized(presented):
@@ -2850,7 +2954,8 @@ def create_app() -> Any:
     Both MCP endpoints share the same Bearer token; GET /health stays open.
     RFC 9728 protected-resource metadata under
     /.well-known/oauth-protected-resource also stays open (no secrets).
-    Tool functions are registered once on two FastMCP servers, so there is
+    The static Smithery server card under /.well-known/mcp/server-card.json
+    also stays open (no secrets). Tool functions are registered once on two FastMCP servers, so there is
     no duplicated business logic. Lifespan enters both FastMCP session
     managers via the public Starlette lifespan protocol.
 
@@ -2880,6 +2985,7 @@ def create_app() -> Any:
         seen.add(key)
         merged_routes.append(route)
     merged_routes.extend(protected_resource_routes())
+    merged_routes.extend(server_card_routes())
 
     # Dedupe middleware by full identity (class + args + kwargs); class-only
     # dedupe would silently drop same-class middleware with different config.

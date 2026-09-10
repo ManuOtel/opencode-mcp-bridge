@@ -79,12 +79,17 @@ Discovery support (no OAuth server): the bridge serves truthful RFC
 pointer at the matching metadata URL. The metadata intentionally
 omits `authorization_servers` because the bridge operates none; it
 only describes the static-Bearer resource so scanners get a valid
-metadata shape instead of an auth error. Limitation: this does NOT
+metadata shape instead of an auth error. Static fallback: `GET
+/.well-known/mcp/server-card.json` (plus trailing-slash variant, HEAD
+included) serves the Smithery static card with no secrets: worker
+endpoint tools only (exact five `worker_*`, live descriptions and
+input schemas, never `exec_run`), `authentication: {required: true,
+schemes: ["bearer"]}` with no OAuth claim. Limitation: this does NOT
 enable an OAuth login flow, and a full Smithery scan of the protected
 endpoint still needs the operator to supply the Bearer token out of
 band (or run a real OAuth authorization server, which is out of
 scope). Auth is unchanged: `/mcp` and `/worker-mcp` still require
-the Bearer token, and only GET/HEAD on the metadata paths bypass
+the Bearer token, and only GET/HEAD on the metadata and card paths bypass
 it.
 
 See the [official registry API documentation](https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/api/official-registry-api.md)
