@@ -10,6 +10,10 @@ Worker-first bridge. Bosses use five tools; legacy tools are advanced compatibil
   alone never counts as free; cost metadata is preserved in entries but does
   not infer billing entitlement. The configured default provider/model sorts
   first when it survives filters, then deterministic provider/model order.
+  `recommendations` is always present and filter-independent: rank 1 is the
+  configured free default (try first), rank 2 is the paid OpenCode Go fallback
+  `opencode-go/muse-spark-1.3-contributor` ("Muse Spark 1.3 Contributor",
+  `requires_explicit_request=true`). The bridge never auto-selects paid.
 - `worker_run(message, directory?, title?, agent?, providerID?, modelID?, requestID?)`: start
   background work. Returns `taskID` (= sessionID), state, model, directory, title,
   `requestID`, and `deduplicated`. Pass `requestID` for idempotent retries: same ID

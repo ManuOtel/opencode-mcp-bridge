@@ -140,7 +140,7 @@ Primary worker tools:
 | --- | --- |
 | `worker_run` | Start a background worker (create session + async prompt). Returns compact `taskID` (= session ID), state, model, directory, title, `requestID`, `deduplicated`. Optional `requestID` makes retries idempotent. |
 | `worker_status` | Poll state (`running`/`idle`/`error`/`unknown`) plus latest assistant text only, with truncation counts and bounded `directory` (recovered when omitted). |
-| `worker_catalog` | List models, free + connected only by default, with bridge defaults. |
+| `worker_catalog` | List models, free + connected only by default, with bridge defaults and ordered `recommendations` (free first, paid fallback second). |
 | `worker_verify` | Re-check a finished worker (state + evidence), read-only. Part of the 0.2.0 worker API. |
 | `worker_cleanup` | Abort (`action=abort`) or delete (`action=delete`) a worker session. Prompts before running. Part of the 0.2.0 worker API (`abort_session` / `delete_session` remain the full-profile equivalents). |
 
@@ -183,7 +183,9 @@ Session and utility tools:
 - `worker_run` takes the same model options and defaults to the configured free model.
   `requestID` is optional; omit it to keep legacy behavior.
   `worker_catalog` filters (`free_only`, `connected_only` default true, `limit` default
-  20, cap 100).
+  20, cap 100) apply to `models`/`total` only; `recommendations` is always
+  two entries (free default rank 1, paid `opencode-go/muse-spark-1.3-contributor`
+  rank 2) so clients can discover the fallback when the free model is unavailable.
 - `abort_session`, `delete_session`, and `get_diff` are full-profile legacy
   equivalents of `worker_cleanup` and `worker_verify`. Prefer the worker tools.
 
@@ -191,6 +193,10 @@ Session and utility tools:
 
 - Default model is `opencode/muse-spark-1.3-contributor-free`. Confirm with `worker_catalog`.
 - No paid models, no Copilot, unless explicitly requested for that task.
+- Ordered fallback: free first, then paid `opencode-go/muse-spark-1.3-contributor`
+  ("Muse Spark 1.3 Contributor") from `worker_catalog.recommendations[1]`.
+  Paid use must be intentional: pass `providerID`/`modelID` explicitly only
+  when the boss asked for paid for that task. The bridge never auto-selects paid.
 
 ## Security and approval profiles
 
