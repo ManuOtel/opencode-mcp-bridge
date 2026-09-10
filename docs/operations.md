@@ -58,8 +58,12 @@ the target. If either is dirty, stop. Do not copy a dirty tree over
 
 The unit file is `deploy/opencode-mcp-bridge.service`. Persistent state:
 
-- Env file: `/etc/opencode-mcp-bridge/env`, mode `0600`,
-  owner `root:opencode-mcp`. Holds `MCP_BEARER_TOKEN`,
+- Env file: `/etc/opencode-mcp-bridge/env`, mode `0640`,
+  owner `root`, group `opencode-mcp` (matches
+  `install -m 640 -o root -g opencode-mcp` below and
+  `deploy/opencode-mcp-bridge.service`; group read lets the
+  `opencode-mcp` service user read it, `0600` would block it).
+  Holds `MCP_BEARER_TOKEN`,
   `OPENCODE_SERVER_PASSWORD`, and optional rotation/second-level vars.
   Never commit this file.
 - Working dir: `/opt/opencode-mcp-bridge`, owned `root:root`.
@@ -186,13 +190,27 @@ in the same order.
 Keep the previous release dir, worktree, or image tagged until the new
 release passes section 3.
 
-Host systemd:
+Host systemd (never `git checkout` inside the live or dirty
+`/opt/opencode-mcp-bridge`; same clean-release rule as section 1):
 
 ```bash
-cd /opt/opencode-mcp-bridge
+git -C /opt/opencode-mcp-bridge rev-parse HEAD  # read-only evidence only
+git fetch origin
+git worktree add /tmp/bridge-release-<previous-tag-or-sha> <previous-tag-or-sha>
+cd /tmp/bridge-release-<previous-tag-or-sha>
+git status --short  # must be empty; if not, stop
 git rev-parse HEAD
-git checkout <previous-tag-or-sha>
-uv sync --frozen --no-dev
+```
+
+Cut over the persistent `/opt/opencode-mcp-bridge` path from the
+clean worktree, preserving the failed checkout for forensics:
+
+```bash
+cd /tmp/bridge-release-<previous-tag-or-sha> && uv sync --frozen --no-dev
+sudo systemctl stop opencode-mcp-bridge
+sudo mv /opt/opencode-mcp-bridge "/opt/opencode-mcp-bridge-failed-$(date -u +%Y%m%dT%H%M%SZ)"
+sudo mv /tmp/bridge-release-<previous-tag-or-sha> /opt/opencode-mcp-bridge
+sudo chown -R root:root /opt/opencode-mcp-bridge
 sudo systemctl daemon-reload
 sudo systemctl restart opencode-mcp-bridge
 ```
