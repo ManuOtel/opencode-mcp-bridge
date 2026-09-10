@@ -98,7 +98,7 @@ Native MCP fallback (transport only, no skills). Use the env-var reference
 form so the token value never lands in Claude config:
 
 ```bash
-claude mcp add --transport http opencode "$OPENCODE_MCP_URL" --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'
+claude mcp add --transport http --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' opencode "$OPENCODE_MCP_URL"
 ```
 
 Claude Code expands `${OPENCODE_MCP_BEARER_TOKEN}` at request time. Keep the

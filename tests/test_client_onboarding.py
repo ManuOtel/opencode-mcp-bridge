@@ -161,6 +161,12 @@ def test_helper_stores_claude_reference_not_token_value() -> None:
     assert "${OPENCODE_MCP_BEARER_TOKEN}" in text
     assert "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'" in text
     assert '"Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"' not in text
+    # All MCP options (--header) must precede the server name and URL.
+    assert (
+        "claude mcp add --transport http "
+        "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'" in text
+    )
+    assert '"$NAME" "$MCP_URL" --header' not in text
 
 
 def test_helper_rejects_malformed_url(tmp_path: Path) -> None:
@@ -207,6 +213,13 @@ def test_helper_claude_passes_reference_not_value(tmp_path: Path) -> None:
     assert "${OPENCODE_MCP_BEARER_TOKEN}" in recorded
     assert canary not in recorded
     assert canary not in proc.stdout + proc.stderr
+    # --header must precede the server name and URL per Claude Code docs.
+    lines = recorded.splitlines()
+    assert "--header" in lines
+    assert "Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}" in lines
+    assert url in lines
+    assert lines.index("--header") < lines.index("opencode")
+    assert lines.index("--header") < lines.index(url)
 
 
 def test_docs_commands_and_urls() -> None:
@@ -217,6 +230,11 @@ def test_docs_commands_and_urls() -> None:
     assert "--bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN" in text
     assert "claude mcp add --transport http" in text
     assert "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'" in text
+    assert (
+        "claude mcp add --transport http "
+        "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' "
+        'opencode "$OPENCODE_MCP_URL"' in text
+    )
     assert "$OPENCODE_MCP_URL" in text
     assert 'export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"' in text
     assert "/worker-mcp" in text
@@ -284,3 +302,14 @@ def test_readme_claude_uses_env_var_reference() -> None:
     text = README.read_text()
     assert "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'" in text
     assert '"Authorization: Bearer <token>"' not in text
+    # All MCP options (--header) must precede the server name and URL.
+    assert (
+        "claude mcp add --transport http "
+        "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' "
+        'opencode "$OPENCODE_MCP_URL"' in text
+    )
+    assert (
+        "claude mcp add --transport http "
+        "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' "
+        'opencode-bridge "$OPENCODE_MCP_URL"' in text
+    )

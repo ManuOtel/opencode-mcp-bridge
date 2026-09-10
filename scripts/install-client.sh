@@ -108,7 +108,7 @@ fi
 
 if [ "$MODE" = "claude" ] || [ "$MODE" = "both" ]; then
   echo "warning: Claude Code stores a Bearer \${OPENCODE_MCP_BEARER_TOKEN} reference; keep the variable exported" >&2
-  claude mcp add --transport http "$NAME" "$MCP_URL" --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'
+  claude mcp add --transport http --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' "$NAME" "$MCP_URL"
 fi
 
 echo "done: registered '$NAME' at $MCP_URL for mode '$MODE'"

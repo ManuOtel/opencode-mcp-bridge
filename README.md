@@ -102,7 +102,7 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
   `coordinate-opencode-worker` skill. Both variables must be exported before
   install. See [docs/client-setup.md](docs/client-setup.md) section 7. There
   is no npm or Brew package; both marketplaces install from this GitHub repo.
-- Claude Code (manual transport only, no skills): `claude mcp add --transport http opencode "$OPENCODE_MCP_URL" --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'` (env-var reference, never the token value).
+- Claude Code (manual transport only, no skills): `claude mcp add --transport http --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' opencode "$OPENCODE_MCP_URL"` (env-var reference, never the token value).
 - Codex (manual transport only): `codex mcp add opencode --url "$OPENCODE_MCP_URL" --bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN`.
   The manifest is `.codex-plugin/plugin.json`; bundled MCP config is
   `.mcp.json` (server `opencode`, visible placeholder
@@ -113,7 +113,7 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
   Existing clients keep the full catalog at `https://<your-domain>/mcp`;
   worker-only clients use `https://<your-domain>/worker-mcp`. Both paths share
   the same Bearer token. Remote HTTP only; there is no local stdio command.
-  - Claude Code: `claude mcp add --transport http opencode-bridge "$OPENCODE_MCP_URL" --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'`
+  - Claude Code: `claude mcp add --transport http --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' opencode-bridge "$OPENCODE_MCP_URL"`
   - ChatGPT: Developer Mode ON > Connectors > Create connector, URL mode with
     `https://<your-domain>/mcp` + Bearer token, then Scan Tools.
   - Debug: MCP Inspector or `./scripts/smoke.sh` (see script header).
