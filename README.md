@@ -266,6 +266,8 @@ Put a reverse proxy with TLS in front. Traefik example: `deploy/traefik-opencode
 Host systemd keeps full terminal access for `exec_run` (see
 `deploy/opencode-mcp-bridge.service`, env file `0600`); Docker scopes `exec_run` to
 the container (`docker compose up -d` after filling `.env`).
+For clean release, pre/post-deploy checks, rotation, rollback, and log
+steps, follow [docs/operations.md](docs/operations.md).
 
 ## Contributor workflow
 
