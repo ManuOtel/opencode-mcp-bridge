@@ -7,7 +7,10 @@ Conventions used below:
 
 - `https://<your-domain>` is your own edge URL (placeholder only).
 - `http://127.0.0.1:8087` is the local origin default (`MCP_HOST`/`MCP_PORT`).
-- `BASE` is the origin or edge base you are checking.
+- `MCP_URL="https://<your-domain>/worker-mcp"` is the explicit worker
+  endpoint (locally `http://127.0.0.1:8087/worker-mcp`).
+  `HEALTH_URL="https://<your-domain>/health"` is the explicit health URL
+  (locally `http://127.0.0.1:8087/health`).
 - `MCP_BEARER_TOKEN` and `MCP_BEARER_TOKEN_SECONDARY` are env-var
   references only. Never paste real tokens, passwords, or
   `Authorization` header values into docs, issues, or logs.
@@ -100,25 +103,36 @@ origin stays bound to loopback; TLS terminates upstream.
 ## 3. Pre/post-deploy checks
 
 Run unauthenticated checks first, then authenticated Streamable HTTP
-checks. `scripts/smoke.sh` automates the same sequence:
+checks. `scripts/smoke.sh` checks the deployed worker endpoint only
+(`GET /health` without a token, unauthenticated `POST` is `401`,
+authenticated `tools/list` returns exactly the five `worker_*` tools
+with no `exec_run`):
 
 ```bash
-BASE="http://127.0.0.1:8087" MCP_BEARER_TOKEN="<paste-token-here>" ./scripts/smoke.sh
+export MCP_URL="https://<your-domain>/worker-mcp"
+export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+./scripts/smoke.sh
 ```
 
-Against your edge, set `BASE="https://<your-domain>"` with the same
-token variable. Manual equivalents:
+Locally, set `MCP_URL="http://127.0.0.1:8087/worker-mcp"` with the same
+token variable. The script takes no arguments, never prints the token
+or `Authorization` header, and prints counts plus tool names instead
+of full responses. It verifies transport behavior only and does not
+prove client compatibility; register a real client per
+`docs/client-setup.md` to confirm end-to-end use. Manual equivalents
+for both endpoints (self-contained; locally use `http://127.0.0.1:8087`):
 
 ```bash
-curl -fsS "$BASE/health"
+export HEALTH_URL="https://<your-domain>/health"
+curl -fsS "$HEALTH_URL"
 ```
 
 Expect HTTP 200 with a minimal body and no token required. This is the
 only unauthenticated endpoint.
 
 ```bash
-for path in mcp worker-mcp; do
-  curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$BASE/$path" \
+for url in "https://<your-domain>/mcp" "https://<your-domain>/worker-mcp"; do
+  curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$url" \
     -H 'Content-Type: application/json' -d '{}'
 done
 ```
@@ -127,8 +141,9 @@ Expect `401` on both `/mcp` and `/worker-mcp` without a Bearer token.
 If either returns anything else, stop.
 
 ```bash
-for path in mcp worker-mcp; do
-  curl -fsS -X POST "$BASE/$path" \
+export MCP_BEARER_TOKEN="<paste-token-here>"
+for url in "https://<your-domain>/mcp" "https://<your-domain>/worker-mcp"; do
+  curl -fsS -X POST "$url" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
     -H 'Accept: application/json, text/event-stream' \
@@ -139,8 +154,9 @@ done
 Expect a valid `initialize` result on both paths.
 
 ```bash
-for path in mcp worker-mcp; do
-  curl -fsS -X POST "$BASE/$path" \
+export MCP_BEARER_TOKEN="<paste-token-here>"
+for url in "https://<your-domain>/mcp" "https://<your-domain>/worker-mcp"; do
+  curl -fsS -X POST "$url" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
     -H 'Accept: application/json, text/event-stream' \
@@ -293,14 +309,15 @@ Verify after enabling (replace the origin with one of your configured
 values for the allowed case):
 
 ```bash
-for path in mcp worker-mcp; do
-  curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$BASE/$path" \
+export MCP_BEARER_TOKEN="<paste-token-here>"
+for url in "https://<your-domain>/mcp" "https://<your-domain>/worker-mcp"; do
+  curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$url" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
     -H 'Accept: application/json, text/event-stream' \
     -H 'Origin: https://allowed.example' \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
-  curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$BASE/$path" \
+  curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$url" \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
     -H 'Accept: application/json, text/event-stream' \
