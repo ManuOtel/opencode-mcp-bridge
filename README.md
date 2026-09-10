@@ -476,8 +476,11 @@ the same policy in the client config.
   `MCP_BEARER_TOKEN`, unset the secondary, restart. Blank or duplicate
   secondary values fail startup closed. Comparison is constant-time and
   token values are never logged.
-- `/health` is the only unauthenticated endpoint. Everything under
-  `/mcp` and `/worker-mcp` requires the Bearer token.
+- `/health` is the only unauthenticated endpoint, plus read-only
+  RFC 9728 discovery at `GET /.well-known/oauth-protected-resource`
+  (and its `/mcp` and `/worker-mcp` children, no secrets, no
+  authorization server). Everything under `/mcp` and `/worker-mcp`
+  requires the Bearer token.
 - Request-body limit: `MCP_MAX_BODY_BYTES` (default 1048576, 1 MiB) caps
   the declared `Content-Length` and the actual streamed body on `/mcp`
   and `/worker-mcp`. Oversized requests get a generic 413 before any
@@ -592,7 +595,14 @@ Still requires a human owner login (not done by this change):
   from your own public HTTPS `/worker-mcp` URL
   ([docs](https://smithery.ai/docs/build/publish)). This bridge uses
   a static Bearer token, not OAuth, so an auth-required endpoint
-  needs manual review during the Smithery scan.
+  needs manual review during the Smithery scan: supply the token out
+  of band. The bridge serves truthful RFC 9728 metadata at
+  `GET /.well-known/oauth-protected-resource` (plus `/mcp` and
+  `/worker-mcp` children, no secrets, no authorization server) and
+  points 401s at it via `WWW-Authenticate`, which fixes the
+  "not a valid OAuth Protected Resource Metadata response" scan
+  error without weakening auth. It does not add an OAuth login flow;
+  that needs a real authorization server and is out of scope.
 
 Listing versus hosting: a registry entry lists the open-source
 bridge (repo, docs, install). It never grants access or supplies a token.

@@ -71,6 +71,22 @@ endpoint. This bridge uses a static Bearer token rather than OAuth,
 so the Smithery scan of an auth-required endpoint needs manual
 handling. Do not add invented `smithery.yaml` fields to this repo.
 
+Discovery support (no OAuth server): the bridge serves truthful RFC
+9728 protected-resource metadata with no secrets at
+`GET /.well-known/oauth-protected-resource` plus the path-inserted
+`/mcp` and `/worker-mcp` children, and 401s on `/mcp` and
+`/worker-mcp` carry a `WWW-Authenticate: Bearer ... resource_metadata`
+pointer at the matching metadata URL. The metadata intentionally
+omits `authorization_servers` because the bridge operates none; it
+only describes the static-Bearer resource so scanners get a valid
+metadata shape instead of an auth error. Limitation: this does NOT
+enable an OAuth login flow, and a full Smithery scan of the protected
+endpoint still needs the operator to supply the Bearer token out of
+band (or run a real OAuth authorization server, which is out of
+scope). Auth is unchanged: `/mcp` and `/worker-mcp` still require
+the Bearer token, and only GET/HEAD on the metadata paths bypass
+it.
+
 See the [official registry API documentation](https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/api/official-registry-api.md)
 and the [generic server.json specification](https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/server-json/generic-server-json.md)
 for current registry requirements.

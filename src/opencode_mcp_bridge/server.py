@@ -6,6 +6,10 @@ ChatGPT, Claude Code, Codex, and other MCP-compatible harnesses.
 Auth: static Bearer token on every /mcp and /worker-mcp request, with an
 optional secondary rotation token for overlap (see README rotation steps);
 Basic auth to opencode. Health: GET /health is open (reverse-proxy checks).
+Discovery: GET /.well-known/oauth-protected-resource (+ /mcp and
+/worker-mcp children) is open RFC 9728 metadata with no secrets and no
+authorization server; 401s on /mcp and /worker-mcp point at it via
+WWW-Authenticate.
 
 Run:
     python -m opencode_mcp_bridge.server
@@ -30,6 +34,7 @@ from fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
 from opencode_mcp_bridge import observability
 from opencode_mcp_bridge.config import (
@@ -2532,15 +2537,176 @@ def _origin_from_referer(value: str) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+RESOURCE_DOCUMENTATION_URL = "https://github.com/ManuOtel/opencode-mcp-bridge"
+WELL_KNOWN_PREFIX = "/.well-known/oauth-protected-resource"
+MCP_RESOURCE_SUFFIXES = {"": "", "/mcp": "/mcp", "/worker-mcp": "/worker-mcp"}
+
+
+def _public_base_url(scope: Any, headers: dict[bytes, bytes]) -> str:
+    """Derive the public base URL from proxy headers or the request scope.
+
+    Prefers X-Forwarded-Proto/Host (first value) behind a reverse proxy,
+    then Host, then the ASGI server entry. No secret or token is echoed.
+
+    Args:
+        scope: ASGI scope.
+        headers: Lowercased request headers.
+
+    Returns:
+        Base URL as scheme://host without a trailing slash.
+    """
+    forwarded_proto = headers.get(b"x-forwarded-proto", b"").decode("latin-1")
+    forwarded_host = headers.get(b"x-forwarded-host", b"").decode("latin-1")
+    scheme = (forwarded_proto.split(",")[0].strip() if forwarded_proto else "") or scope.get(
+        "scheme", "https"
+    )
+    if scheme not in ("http", "https"):
+        scheme = "https"
+    raw_host = (forwarded_host.split(",")[0].strip() if forwarded_host else "") or (
+        headers.get(b"host", b"").decode("latin-1").split(",")[0].strip()
+    )
+    host = raw_host or "localhost"
+    return f"{scheme}://{host}"
+
+
+def _metadata_url_for_scope(scope: Any, headers: dict[bytes, bytes], suffix: str) -> str:
+    """Return the metadata URL for an MCP resource suffix.
+
+    Args:
+        scope: ASGI scope.
+        headers: Lowercased request headers.
+        suffix: Either "" (generic), "/mcp", or "/worker-mcp".
+
+    Returns:
+        Absolute metadata URL under the well-known prefix.
+    """
+    base = _public_base_url(scope, headers)
+    return f"{base}{WELL_KNOWN_PREFIX}{suffix}"
+
+
+def _protected_resource_payload(resource: str) -> dict[str, Any]:
+    """Build a truthful RFC 9728 protected-resource metadata payload.
+
+    The bridge uses a static Bearer token and operates no OAuth
+    authorization server, so authorization_servers is intentionally
+    omitted (optional per RFC 9728) rather than invented.
+
+    Args:
+        resource: Absolute protected-resource identifier.
+
+    Returns:
+        Minimal metadata dict with resource, bearer method, and docs.
+    """
+    return {
+        "resource": resource,
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": RESOURCE_DOCUMENTATION_URL,
+    }
+
+
+async def _protected_resource_handler(request: Request) -> Response:
+    """Serve unauthenticated RFC 9728 metadata for the generic prefix.
+
+    Args:
+        request: Starlette request.
+
+    Returns:
+        JSON metadata describing the server root resource.
+    """
+    raw_headers = {k.lower(): v for k, v in request.scope.get("headers", [])}
+    base = _public_base_url(request.scope, raw_headers)
+    return JSONResponse(_protected_resource_payload(base + "/"))
+
+
+async def _protected_resource_mcp_handler(request: Request) -> Response:
+    """Serve unauthenticated RFC 9728 metadata for the /mcp resource.
+
+    Args:
+        request: Starlette request.
+
+    Returns:
+        JSON metadata with the absolute /mcp resource identifier.
+    """
+    raw_headers = {k.lower(): v for k, v in request.scope.get("headers", [])}
+    base = _public_base_url(request.scope, raw_headers)
+    return JSONResponse(_protected_resource_payload(base + "/mcp"))
+
+
+async def _protected_resource_worker_handler(request: Request) -> Response:
+    """Serve unauthenticated RFC 9728 metadata for the /worker-mcp resource.
+
+    Args:
+        request: Starlette request.
+
+    Returns:
+        JSON metadata with the absolute /worker-mcp resource identifier.
+    """
+    raw_headers = {k.lower(): v for k, v in request.scope.get("headers", [])}
+    base = _public_base_url(request.scope, raw_headers)
+    return JSONResponse(_protected_resource_payload(base + "/worker-mcp"))
+
+
+def _is_protected_resource_path(normalized: str) -> bool:
+    """Check whether a normalized path is an RFC 9728 metadata endpoint.
+
+    Args:
+        normalized: Path with trailing slash stripped (root stays "/").
+
+    Returns:
+        True for the prefix itself and any path under it.
+    """
+    return normalized == WELL_KNOWN_PREFIX or normalized.startswith(WELL_KNOWN_PREFIX + "/")
+
+
+def protected_resource_routes() -> list[Route]:
+    """Return unauthenticated GET routes for RFC 9728 discovery.
+
+    Covers the generic prefix plus the path-inserted variants for /mcp
+    and /worker-mcp, each with and without a trailing slash so scanners
+    get JSON either way. Only GET/HEAD are served; auth still guards
+    every other method via the middleware bypass rule.
+
+    Returns:
+        List of Starlette routes.
+    """
+    return [
+        Route(WELL_KNOWN_PREFIX, _protected_resource_handler, methods=["GET", "HEAD"]),
+        Route(WELL_KNOWN_PREFIX + "/", _protected_resource_handler, methods=["GET", "HEAD"]),
+        Route(WELL_KNOWN_PREFIX + "/mcp", _protected_resource_mcp_handler, methods=["GET", "HEAD"]),
+        Route(
+            WELL_KNOWN_PREFIX + "/mcp/",
+            _protected_resource_mcp_handler,
+            methods=["GET", "HEAD"],
+        ),
+        Route(
+            WELL_KNOWN_PREFIX + "/worker-mcp",
+            _protected_resource_worker_handler,
+            methods=["GET", "HEAD"],
+        ),
+        Route(
+            WELL_KNOWN_PREFIX + "/worker-mcp/",
+            _protected_resource_worker_handler,
+            methods=["GET", "HEAD"],
+        ),
+    ]
+
+
 class BearerAuthMiddleware:
     """ASGI middleware requiring a static Bearer token, except health.
 
     Covers both /mcp (full catalog) and /worker-mcp (worker-only catalog).
     Only GET/HEAD on normalized /health (/health/) bypass auth; every
     other method on health and every MCP route requires the token.
-    Accepts one primary token plus an optional secondary rotation token;
-    every candidate is compared with hmac.compare_digest (no early exit)
-    and validation fails closed. Token values are never logged.
+    GET/HEAD on /.well-known/oauth-protected-resource and its /mcp and
+    /worker-mcp children also bypass auth (RFC 9728 discovery, no
+    secrets). Accepts one primary token plus an optional secondary
+    rotation token; every candidate is compared with hmac.compare_digest
+    (no early exit) and validation fails closed. Token values are never
+    logged. Rejections on /mcp and /worker-mcp carry a Bearer
+    WWW-Authenticate challenge with a resource_metadata pointer so
+    OAuth-aware scanners get valid discovery metadata; the bridge
+    operates no authorization server, so the metadata intentionally
+    omits authorization_servers.
 
     When allowed_origins is non-empty, an additional browser-origin
     policy applies to /mcp and /worker-mcp only, after authentication:
@@ -2622,6 +2788,12 @@ class BearerAuthMiddleware:
             await self.app(scope, receive, send)
             return
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        if _is_protected_resource_path(normalized) and scope.get("method") in (
+            "GET",
+            "HEAD",
+        ):
+            await self.app(scope, receive, send)
+            return
         auth = headers.get(b"authorization", b"")
         scheme, _, presented = auth.partition(b" ")
         if scheme.lower() != b"bearer" or not self._is_authorized(presented):
@@ -2631,7 +2803,15 @@ class BearerAuthMiddleware:
                 outcome=observability.OUTCOME_REJECTED,
                 error_class="Unauthorized",
             )
-            response = JSONResponse({"error": "unauthorized"}, status_code=401)
+            challenge = 'Bearer error="unauthorized"'
+            if normalized in ("/mcp", "/worker-mcp"):
+                metadata_url = _metadata_url_for_scope(scope, headers, normalized)
+                challenge = f'Bearer error="unauthorized", resource_metadata="{metadata_url}"'
+            response = JSONResponse(
+                {"error": "unauthorized"},
+                status_code=401,
+                headers={"WWW-Authenticate": challenge},
+            )
             await response(scope, receive, send)
             return
         if normalized in ("/mcp", "/worker-mcp") and self._allowed_origin_set:
@@ -2668,6 +2848,8 @@ def create_app() -> Any:
     """Build the Starlette app: /mcp (full) + /worker-mcp (worker-only).
 
     Both MCP endpoints share the same Bearer token; GET /health stays open.
+    RFC 9728 protected-resource metadata under
+    /.well-known/oauth-protected-resource also stays open (no secrets).
     Tool functions are registered once on two FastMCP servers, so there is
     no duplicated business logic. Lifespan enters both FastMCP session
     managers via the public Starlette lifespan protocol.
@@ -2697,6 +2879,7 @@ def create_app() -> Any:
             continue
         seen.add(key)
         merged_routes.append(route)
+    merged_routes.extend(protected_resource_routes())
 
     # Dedupe middleware by full identity (class + args + kwargs); class-only
     # dedupe would silently drop same-class middleware with different config.
