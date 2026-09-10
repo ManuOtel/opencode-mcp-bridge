@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -40,6 +41,11 @@ def test_helper_syntax_ok() -> None:
     """The helper must parse cleanly under bash -n."""
     proc = subprocess.run(["bash", "-n", str(HELPER)], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_helper_is_executable() -> None:
+    """The helper must keep its user execute bit for ./scripts/install-client.sh."""
+    assert HELPER.stat().st_mode & stat.S_IXUSR, "scripts/install-client.sh must be 100755"
 
 
 def test_helper_shellcheck_if_available() -> None:
