@@ -43,6 +43,13 @@ Replace `<your-domain>` with your bridge host and `<paste-token-here>`
 with the value of `MCP_BEARER_TOKEN` on that host. Then register the
 transport in your harness (see [Harness setup](#harness-setup)).
 
+Quick connect (your own bridge): `./scripts/install-client.sh both`
+registers Codex and Claude Code transports from `OPENCODE_MCP_URL` and
+`OPENCODE_MCP_BEARER_TOKEN`. Full steps live in
+[docs/client-setup.md](docs/client-setup.md). The maintainer demo is
+opt-in only and may require its own token; generic installs never point
+at another person's server.
+
 Rules for every example in this file:
 
 - `https://<your-domain>/worker-mcp` is the safe default. It exposes
@@ -163,8 +170,16 @@ config, which can persist the token on disk. Prefer the `.mcp.json`
 form above on shared hosts, and rotate the token if a config file
 leaks.
 
+Prefer the env-var reference form so the token value never lands in
+config (see [docs/client-setup.md](docs/client-setup.md) section 3):
+
+```bash
+claude mcp add --transport http --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' opencode "$OPENCODE_MCP_URL"
+claude mcp add --transport http --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' opencode-bridge "$OPENCODE_MCP_URL"
+```
+
 Recommended path: the `opencode-worker` plugin from this repo's Claude
-marketplace. It bundles the MCP transport
+marketplace (`.claude-plugin/marketplace.json`). It bundles the MCP transport
 (URL `${OPENCODE_MCP_URL}`, token `${OPENCODE_MCP_BEARER_TOKEN}`) plus
 the `coordinate-opencode-worker` skill. Export both variables before
 installing:
