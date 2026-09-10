@@ -8,6 +8,12 @@ export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
 ./scripts/install-client.sh both
 ```
 
+Validate inputs without changing client config:
+
+```bash
+./scripts/install-client.sh both --dry-run
+```
+
 Manual copy/paste below. There is no npm or Brew package; both clients
 install from this GitHub repo.
 

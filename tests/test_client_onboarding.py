@@ -313,3 +313,130 @@ def test_readme_claude_uses_env_var_reference() -> None:
         "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' "
         'opencode-bridge "$OPENCODE_MCP_URL"' in text
     )
+
+
+def _stub_clients(tmp_path: Path, marker_dir: Path) -> Path:
+    """Create stub codex/claude CLIs that record invocation via marker files."""
+    bin_dir = tmp_path / "bin-stubs"
+    bin_dir.mkdir(exist_ok=True)
+    for name in ("codex", "claude"):
+        marker = marker_dir / f"{name}.invoked"
+        stub = bin_dir / name
+        stub.write_text(f"#!/usr/bin/env bash\ntouch {marker}\n")
+        stub.chmod(0o755)
+    return bin_dir
+
+
+def _dry_run_env(bin_dir: Path, token: str, url: str) -> dict[str, str]:
+    return {
+        "OPENCODE_MCP_BEARER_TOKEN": token,
+        "OPENCODE_MCP_URL": url,
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+    }
+
+
+def test_helper_usage_mentions_dry_run() -> None:
+    """Usage documents --dry-run as a non-mutating validation mode."""
+    proc = _run("--help", env={"OPENCODE_MCP_BEARER_TOKEN": "x"})
+    assert proc.returncode == 0
+    assert "--dry-run" in proc.stdout
+
+
+def test_helper_dry_run_codex_does_not_invoke_client(tmp_path: Path) -> None:
+    """Dry-run for codex validates inputs without calling any client CLI."""
+    marker_dir = tmp_path / "markers-codex"
+    marker_dir.mkdir(exist_ok=True)
+    bin_dir = _stub_clients(tmp_path, marker_dir)
+    canary = "canary-token-dryrun-codex001"
+    url = "https://bridge.example.com/worker-mcp"
+    proc = _run("codex", "--dry-run", env=_dry_run_env(bin_dir, canary, url))
+    assert proc.returncode == 0, proc.stderr
+    assert not (marker_dir / "codex.invoked").exists()
+    assert not (marker_dir / "claude.invoked").exists()
+    combined = proc.stdout + proc.stderr
+    assert "mode='codex'" in proc.stdout
+    assert "opencode" in proc.stdout
+    assert url in proc.stdout
+    assert "OPENCODE_MCP_BEARER_TOKEN" in combined
+    assert "not invoked" in combined
+    assert canary not in combined
+
+
+def test_helper_dry_run_claude_does_not_invoke_client(tmp_path: Path) -> None:
+    """Dry-run for claude validates inputs without calling any client CLI."""
+    marker_dir = tmp_path / "markers-claude"
+    marker_dir.mkdir(exist_ok=True)
+    bin_dir = _stub_clients(tmp_path, marker_dir)
+    canary = "canary-token-dryrun-claude001"
+    url = "https://bridge.example.com/mcp"
+    proc = _run("claude", "--name", "custom", "--dry-run", env=_dry_run_env(bin_dir, canary, url))
+    assert proc.returncode == 0, proc.stderr
+    assert not (marker_dir / "codex.invoked").exists()
+    assert not (marker_dir / "claude.invoked").exists()
+    combined = proc.stdout + proc.stderr
+    assert "mode='claude'" in proc.stdout
+    assert "custom" in proc.stdout
+    assert url in proc.stdout
+    assert canary not in combined
+
+
+def test_helper_dry_run_both_does_not_invoke_either(tmp_path: Path) -> None:
+    """Dry-run for both modes invokes neither codex nor claude."""
+    marker_dir = tmp_path / "markers-both"
+    marker_dir.mkdir(exist_ok=True)
+    bin_dir = _stub_clients(tmp_path, marker_dir)
+    canary = "canary-token-dryrun-both001"
+    url = "https://bridge.example.com/worker-mcp"
+    proc = _run("both", "--dry-run", env=_dry_run_env(bin_dir, canary, url))
+    assert proc.returncode == 0, proc.stderr
+    assert not (marker_dir / "codex.invoked").exists()
+    assert not (marker_dir / "claude.invoked").exists()
+    assert "mode='both'" in proc.stdout
+    assert url in proc.stdout
+    assert canary not in proc.stdout + proc.stderr
+
+
+def test_helper_dry_run_needs_no_client_binaries(tmp_path: Path) -> None:
+    """Dry-run succeeds with an empty PATH (no codex/claude required)."""
+    canary = "canary-token-dryrun-nobin001"
+    url = "https://bridge.example.com/worker-mcp"
+    env = _env_without_commands(tmp_path, canary)
+    env["OPENCODE_MCP_URL"] = url
+    proc = _run("both", "--dry-run", env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert url in proc.stdout
+    assert canary not in proc.stdout + proc.stderr
+
+
+def test_helper_dry_run_validates_required_inputs(tmp_path: Path) -> None:
+    """Dry-run still enforces token, URL, and URL shape checks."""
+    url = "https://bridge.example.com/worker-mcp"
+    proc = _run("codex", "--dry-run", env={"OPENCODE_MCP_URL": url})
+    assert proc.returncode != 0
+    assert "OPENCODE_MCP_BEARER_TOKEN is required" in proc.stderr
+
+    canary = "canary-token-dryrun-req002"
+    proc = _run("codex", "--dry-run", env={"OPENCODE_MCP_BEARER_TOKEN": canary})
+    assert proc.returncode != 0
+    assert "OPENCODE_MCP_URL is required" in proc.stdout + proc.stderr
+    assert canary not in proc.stdout + proc.stderr
+
+    for bad_url, fragment in (
+        ("bridge.example.com/worker-mcp", "must start with http"),
+        ("https://bridge.example.com/tools", "must end with /worker-mcp or /mcp"),
+    ):
+        proc = _run(
+            "claude",
+            "--dry-run",
+            env={"OPENCODE_MCP_BEARER_TOKEN": canary, "OPENCODE_MCP_URL": bad_url},
+        )
+        assert proc.returncode != 0
+        combined = proc.stdout + proc.stderr
+        assert fragment in combined
+        assert canary not in combined
+
+
+def test_docs_dry_run_example() -> None:
+    """Onboarding doc shows one truthful dry-run validation example."""
+    text = DOCS.read_text()
+    assert "./scripts/install-client.sh both --dry-run" in text
