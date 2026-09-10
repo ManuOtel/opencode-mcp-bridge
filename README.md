@@ -33,6 +33,9 @@ See [docs/client-setup.md](docs/client-setup.md) for copy/paste Codex and
 Claude Code commands, token handling, `/worker-mcp` vs `/mcp` URLs, and the
 opinionated plugin skills. For GitHub Copilot, Copilot Studio, and
 Microsoft 365 Copilot, see [docs/copilot-setup.md](docs/copilot-setup.md).
+For the public registry metadata and publication checklist, see
+[docs/registry.md](docs/registry.md). The registry entry describes the
+software; it never supplies a hosted bridge or access token.
 
 ## Worker quickstart (start here)
 

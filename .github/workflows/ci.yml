@@ -32,6 +32,7 @@ jobs:
       - name: Validate plugin manifests
         run: |
           for f in \
+            server.json \
             .codex-plugin/plugin.json \
             .mcp.json \
             .agents/plugins/marketplace.json \
