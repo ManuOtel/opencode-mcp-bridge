@@ -1,20 +1,39 @@
 # Client setup (Codex and Claude Code)
 
-One-command path: `./scripts/install-client.sh --help`. Manual copy/paste below.
-There is no npm or Brew package; both clients install from this GitHub repo.
+One-command transport path (requires both env vars, fails fast otherwise):
+
+```bash
+export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
+export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+./scripts/install-client.sh both
+```
+
+Manual copy/paste below. There is no npm or Brew package; both clients
+install from this GitHub repo.
+
+## What this bridge is
+
+This bridge coordinates OpenCode workers. It does not replace OpenCode.
+You still need your own OpenCode server (`opencode serve` or `opencode web`)
+behind your own bridge, plus your own bridge URL and Bearer token. The bridge
+exposes remote Streamable HTTP only (`/mcp` and `/worker-mcp`); there is no
+local stdio transport. A local run still uses HTTP, for example
+`http://127.0.0.1:8087/worker-mcp`. Do not wrap it with `npx mcp-remote` or a
+stdio command: register the HTTP URL directly.
 
 For Copilot-family products (GitHub Copilot, Copilot Studio, Microsoft 365
 Copilot), see [docs/copilot-setup.md](copilot-setup.md). Those three cases are
 separate from Codex and Claude Code.
 
 > Your bridge vs the maintainer demo. This repo helps you connect Codex and
-> Claude Code to **your own** self-hosted `opencode-mcp-bridge` (your server,
-> your token, your `https://<your-domain>/worker-mcp`). Nothing in the generic
-> install path points at anyone else's server. The maintainer's demo endpoint
-> (`https://opencode-mcp.manuotel.com/worker-mcp`) is opt-in only: use it
-> solely if the maintainer explicitly invited you to try it, by exporting it
-> as your `OPENCODE_MCP_URL` (section 4). It never becomes your server
-> silently.
+> Claude Code to **your own** self-hosted `opencode-mcp-bridge` (your OpenCode
+> server, your bridge, your token, your `https://<your-domain>/worker-mcp`).
+> Nothing in the generic install path points at anyone else's server. The
+> maintainer's demo endpoint (`https://opencode-mcp.manuotel.com/worker-mcp`)
+> is only an example/shared service and is opt-in only: use it solely if the
+> maintainer explicitly invited you to try it, by exporting it as your
+> `OPENCODE_MCP_URL` (section 4). It may require its own token (the
+> maintainer's token, not yours). It never becomes your server silently.
 
 ## 0. Bridge URL setup (required, never defaults)
 
@@ -75,15 +94,26 @@ Claude Code expands `${VAR}` references in `.mcp.json` at load time, so
 export **both** variables from sections 0 and 1 **before** installing the
 plugin; the token is never stored in the repo.
 
-Native MCP fallback (transport only, no skills):
+Native MCP fallback (transport only, no skills). Use the env-var reference
+form so the token value never lands in Claude config:
 
 ```bash
-claude mcp add --transport http opencode "$OPENCODE_MCP_URL" --header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"
+claude mcp add --transport http --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' opencode "$OPENCODE_MCP_URL"
 ```
 
-Warning: Claude Code HTTP header configuration may persist the token locally
-in its MCP config. Prefer Codex env-var mode when shared hosts matter, and
-rotate the token if a config file leaks.
+Claude Code expands `${OPENCODE_MCP_BEARER_TOKEN}` at request time. Keep the
+variable exported in every shell that runs Claude Code. Do not substitute the
+real token into the `--header` value: a double-quoted
+`"Bearer $OPENCODE_MCP_BEARER_TOKEN"` form would persist the secret in local
+config. If a config file leaks, rotate the token. Prefer Codex env-var mode
+when shared hosts matter.
+
+Or via the helper (stores the same `${OPENCODE_MCP_BEARER_TOKEN}` reference,
+fails clearly when `OPENCODE_MCP_URL` is missing or malformed):
+
+```bash
+./scripts/install-client.sh claude
+```
 
 Use `--name <name>` via the helper to register under a different server name.
 
@@ -99,7 +129,18 @@ Use `--name <name>` via the helper to register under a different server name.
   `ENABLE_EXEC_RUN=true` in the deployment env file.
 - Both paths share the same Bearer token. `/health` stays open.
 - The helper takes the URL only from `OPENCODE_MCP_URL` and exits with an
-  error when it is unset or empty. There is no default server.
+  error when it is unset, empty, missing an `http(s)://` scheme, or not ending
+  in `/mcp` or `/worker-mcp`. There is no default server.
+
+### Transport: remote HTTP only (no local stdio)
+
+The bridge serves Streamable HTTP only. There is no stdio command to run.
+Register the URL directly in both clients, even for a bridge on the same
+machine (`http://127.0.0.1:8087/worker-mcp` with your token). Codex uses
+`--url` plus `--bearer-token-env-var`; Claude Code uses `--transport http`
+plus a `${OPENCODE_MCP_BEARER_TOKEN}` header reference. The Claude plugin
+bundle (`plugins/claude-code/.mcp.json`) already uses `${OPENCODE_MCP_URL}`
+and `Bearer ${OPENCODE_MCP_BEARER_TOKEN}` for the same reason.
 
 ### Optional: maintainer demo endpoint
 
@@ -111,7 +152,8 @@ export OPENCODE_MCP_URL="https://opencode-mcp.manuotel.com/worker-mcp"
 ```
 
 That demo is someone else's server with its own token; it is not your
-bridge, and generic installs never use it unless you set it yourself.
+bridge, it may require its token to accept your requests, and generic
+installs never use it unless you set it yourself.
 
 ## 5. Opinionated behavior (automatic with the plugin)
 
@@ -221,4 +263,7 @@ GitHub Copilot cloud agent and code review, Microsoft Copilot Studio, and
 Microsoft 365 Copilot each need their own steps. See
 [copilot-setup.md](copilot-setup.md) for the three separate cases, the
 read-only and change-enabled JSON blocks, and the official GitHub and
-Microsoft links.
+Microsoft links. That guide documents only the connector path supported by
+this repository (your own bridge URL plus your own Bearer token over
+Streamable HTTP); there is no one-command Copilot install here, and
+Microsoft 365 publication may need admin approval in your tenant.

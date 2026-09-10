@@ -70,6 +70,9 @@ def test_helper_usage_text() -> None:
     assert "OPENCODE_MCP_BEARER_TOKEN" in out
     assert "OPENCODE_MCP_URL" in out
     assert "required" in out
+    assert "must start with http" in out
+    assert "must end with" in out
+    assert "${OPENCODE_MCP_BEARER_TOKEN}" in out
     assert MAINTAINER_URL not in out, "usage must not default to the maintainer server"
 
 
@@ -152,10 +155,71 @@ def test_helper_missing_command_fails_clearly(tmp_path: Path) -> None:
     assert "not found: claude" in combined
 
 
-def test_helper_warns_about_claude_token_persistence() -> None:
-    """Helper source warns that Claude header config may persist the token."""
+def test_helper_stores_claude_reference_not_token_value() -> None:
+    """Helper passes a Bearer ${VAR} reference so the token value is never stored."""
     text = HELPER.read_text()
-    assert "may persist the token locally" in text
+    assert "${OPENCODE_MCP_BEARER_TOKEN}" in text
+    assert "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'" in text
+    assert '"Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"' not in text
+    # All MCP options (--header) must precede the server name and URL.
+    assert (
+        "claude mcp add --transport http "
+        "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'" in text
+    )
+    assert '"$NAME" "$MCP_URL" --header' not in text
+
+
+def test_helper_rejects_malformed_url(tmp_path: Path) -> None:
+    """URL without https scheme or without /mcp suffix fails clearly, no token leak."""
+    canary = "canary-token-urlshape001"
+    for bad_url, fragment in (
+        ("bridge.example.com/worker-mcp", "must start with http"),
+        ("https://bridge.example.com/tools", "must end with /worker-mcp or /mcp"),
+    ):
+        proc = _run(
+            "codex",
+            env={
+                "OPENCODE_MCP_BEARER_TOKEN": canary,
+                "OPENCODE_MCP_URL": bad_url,
+                "PATH": f"{tmp_path}:/usr/bin:/bin",
+            },
+        )
+        assert proc.returncode != 0
+        combined = proc.stdout + proc.stderr
+        assert fragment in combined
+        assert canary not in combined
+
+
+def test_helper_claude_passes_reference_not_value(tmp_path: Path) -> None:
+    """A stub claude CLI receives the literal ${VAR} reference, never the token."""
+    bin_dir = tmp_path / "bin-claude"
+    bin_dir.mkdir(exist_ok=True)
+    seen = tmp_path / "claude-args.txt"
+    stub = bin_dir / "claude"
+    stub.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {seen}\n")
+    stub.chmod(0o755)
+    canary = "canary-token-claude-ref001"
+    url = "https://bridge.example.com/worker-mcp"
+    proc = _run(
+        "claude",
+        env={
+            "OPENCODE_MCP_BEARER_TOKEN": canary,
+            "OPENCODE_MCP_URL": url,
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    recorded = seen.read_text()
+    assert "${OPENCODE_MCP_BEARER_TOKEN}" in recorded
+    assert canary not in recorded
+    assert canary not in proc.stdout + proc.stderr
+    # --header must precede the server name and URL per Claude Code docs.
+    lines = recorded.splitlines()
+    assert "--header" in lines
+    assert "Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}" in lines
+    assert url in lines
+    assert lines.index("--header") < lines.index("opencode")
+    assert lines.index("--header") < lines.index(url)
 
 
 def test_docs_commands_and_urls() -> None:
@@ -165,7 +229,12 @@ def test_docs_commands_and_urls() -> None:
     assert "--url" in text
     assert "--bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN" in text
     assert "claude mcp add --transport http" in text
-    assert '--header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"' in text
+    assert "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'" in text
+    assert (
+        "claude mcp add --transport http "
+        "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' "
+        'opencode "$OPENCODE_MCP_URL"' in text
+    )
     assert "$OPENCODE_MCP_URL" in text
     assert 'export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"' in text
     assert "/worker-mcp" in text
@@ -180,10 +249,21 @@ def test_docs_distinguish_own_bridge_from_demo() -> None:
     assert "your own" in flat
     assert "opt-in only" in flat or "opt in explicitly" in flat
     assert "no fallback server" in flat or "no default server" in flat
+    assert "may require its own token" in flat or "may require its token" in flat
     # The maintainer URL may appear solely as an explicit opt-in example.
     assert MAINTAINER_URL in text
     demo_idx = text.index("maintainer demo")
     assert text.index(MAINTAINER_URL) > demo_idx
+
+
+def test_docs_explain_bridge_coordinates_not_replaces() -> None:
+    """Docs state the bridge coordinates workers and needs its own OpenCode server."""
+    text = DOCS.read_text()
+    flat = " ".join(text.split()).lower()
+    assert "does not replace opencode" in flat
+    assert "opencode serve" in flat or "opencode web" in flat
+    assert "no local stdio" in flat or "remote" in flat
+    assert "streamable http" in flat
 
 
 def test_docs_explain_plugin_skills() -> None:
@@ -203,11 +283,33 @@ def test_docs_explain_plugin_skills() -> None:
 def test_readme_quick_connect() -> None:
     """README links the setup doc and shows the one-command helper."""
     text = README.read_text()
+    flat = " ".join(text.split()).lower()
     assert "Quick connect" in text
     assert "docs/client-setup.md" in text
     assert "scripts/install-client.sh" in text
     assert "OPENCODE_MCP_URL" in text
+    assert "does not replace opencode" in flat
+    assert "no local stdio" in flat or "remote http only" in flat
+    assert "may require its own token" in flat or "may require its token" in flat
     assert MAINTAINER_URL not in text, "README generic path must not point at the maintainer server"
     # Opinionated skills/AGENTS.md references stay intact.
     assert "AGENTS.md" in text
     assert "delegate-to-opencode" in text
+
+
+def test_readme_claude_uses_env_var_reference() -> None:
+    """README Claude examples use ${VAR} references, never a hardcoded token."""
+    text = README.read_text()
+    assert "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'" in text
+    assert '"Authorization: Bearer <token>"' not in text
+    # All MCP options (--header) must precede the server name and URL.
+    assert (
+        "claude mcp add --transport http "
+        "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' "
+        'opencode "$OPENCODE_MCP_URL"' in text
+    )
+    assert (
+        "claude mcp add --transport http "
+        "--header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' "
+        'opencode-bridge "$OPENCODE_MCP_URL"' in text
+    )
