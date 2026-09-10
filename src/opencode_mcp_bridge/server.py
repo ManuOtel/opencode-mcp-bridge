@@ -2106,12 +2106,21 @@ def _truncate(text: str, cap: int) -> str:
 class RequestBodyLimitMiddleware:
     """ASGI middleware rejecting oversized MCP request bodies early.
 
-    Enforces MCP_MAX_BODY_BYTES on declared Content-Length for /mcp and
-    /worker-mcp before FastMCP/tool handling. Oversized requests get a
-    generic 413 and never reach downstream tools. Requests with an absent
-    or malformed Content-Length pass through (chunked/unknown length is
-    handled downstream). All other paths (including /health) pass through
-    untouched. The 413 body is generic and never echoes tokens or sizes.
+    Enforces MCP_MAX_BODY_BYTES on declared Content-Length and on the
+    actual streamed body for /mcp and /worker-mcp before FastMCP/tool
+    handling. Declared oversized lengths get an immediate generic 413;
+    absent, malformed, negative, or under-limit declarations fall through
+    to bounded streaming enforcement where http.request chunks are
+    counted and bodies over the limit get the same generic 413. Rejected
+    requests never reach downstream tools. All other paths (including
+    /health) and non-HTTP scopes pass through untouched. Buffered memory
+    stays bounded to the limit (plus one small control message): body
+    bytes are coalesced into a single bytearray, so an unbounded number
+    of empty or fragmented http.request messages cannot grow metadata
+    without bound. Downstream sees one coalesced http.request message
+    with identical bytes (chunk boundaries are not preserved). The
+    413 body is generic and never echoes tokens, sizes, headers, or
+    body bytes.
     """
 
     def __init__(self, app: Any, max_body_bytes: int) -> None:
@@ -2119,7 +2128,7 @@ class RequestBodyLimitMiddleware:
 
         Args:
             app: Downstream ASGI app.
-            max_body_bytes: Max declared Content-Length in bytes.
+            max_body_bytes: Max request body in bytes (declared or streamed).
 
         Raises:
             RuntimeError: If the limit is not a positive integer.
@@ -2129,8 +2138,60 @@ class RequestBodyLimitMiddleware:
         self.app = app
         self._max_body_bytes = max_body_bytes
 
+    async def _reject(self, scope: Any, receive: Any, send: Any) -> None:
+        """Send a generic 413 without echoing request or config values.
+
+        Args:
+            scope: ASGI scope.
+            receive: ASGI receive channel.
+            send: ASGI send channel.
+        """
+        observability.emit(
+            event=observability.EVENT_AUTH,
+            tool=observability.TOOL_AUTH,
+            outcome=observability.OUTCOME_REJECTED,
+            error_class="PayloadTooLarge",
+            status_code=413,
+        )
+        response = JSONResponse({"error": "payload too large"}, status_code=413)
+        await response(scope, receive, send)
+
+    @staticmethod
+    def _chunk_bytes(message: Any) -> bytes:
+        """Return the body bytes of an http.request chunk safely.
+
+        Args:
+            message: ASGI message.
+
+        Returns:
+            Body bytes, or b"" for missing/non-bytes bodies.
+        """
+        if not isinstance(message, dict):
+            return b""
+        body = message.get("body", b"")
+        if isinstance(body, bytes):
+            return body
+        if isinstance(body, (bytearray, memoryview)):
+            return bytes(body)
+        return b""
+
+    @staticmethod
+    def _chunk_len(message: Any) -> int:
+        """Return the byte length of an http.request chunk safely.
+
+        Args:
+            message: ASGI message.
+
+        Returns:
+            Length of the body bytes, or 0 for missing/non-bytes bodies.
+        """
+        return len(RequestBodyLimitMiddleware._chunk_bytes(message))
+
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        """Reject oversized bodies by declared Content-Length.
+        """Reject oversized declared and streamed bodies before downstream.
+
+        Body bytes are coalesced into one bounded bytearray; downstream
+        replays as a single http.request message with identical bytes.
 
         Args:
             scope: ASGI scope.
@@ -2146,29 +2207,60 @@ class RequestBodyLimitMiddleware:
             return
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
         raw = headers.get(b"content-length")
-        if raw is None:
-            await self.app(scope, receive, send)
-            return
-        try:
-            declared = int(raw.decode().strip())
-        except (ValueError, UnicodeDecodeError, AttributeError):
-            await self.app(scope, receive, send)
-            return
-        if declared < 0:
-            await self.app(scope, receive, send)
-            return
-        if declared > self._max_body_bytes:
-            observability.emit(
-                event=observability.EVENT_AUTH,
-                tool=observability.TOOL_AUTH,
-                outcome=observability.OUTCOME_REJECTED,
-                error_class="PayloadTooLarge",
-                status_code=413,
-            )
-            response = JSONResponse({"error": "payload too large"}, status_code=413)
-            await response(scope, receive, send)
-            return
-        await self.app(scope, receive, send)
+        if raw is not None:
+            try:
+                declared = int(raw.decode().strip())
+            except (ValueError, UnicodeDecodeError, AttributeError):
+                declared = -1
+            if declared > self._max_body_bytes:
+                await self._reject(scope, receive, send)
+                return
+        buffered = bytearray()
+        pending: dict | None = None
+        complete = False
+        while True:
+            message = await receive()
+            if not isinstance(message, dict) or message.get("type") != "http.request":
+                pending = message if isinstance(message, dict) else {}
+                break
+            chunk = self._chunk_bytes(message)
+            if chunk:
+                if len(buffered) + len(chunk) > self._max_body_bytes:
+                    await self._reject(scope, receive, send)
+                    return
+                buffered.extend(chunk)
+            if not message.get("more_body", False):
+                complete = True
+                break
+        body_snapshot = bytes(buffered)
+        replayed = False
+        pending_sent = pending is None
+
+        async def _replay() -> dict:
+            """Replay coalesced body, then pending control, then channel."""
+            nonlocal replayed, pending_sent
+            if not replayed:
+                replayed = True
+                if pending is not None and len(body_snapshot) > 0:
+                    return {
+                        "type": "http.request",
+                        "body": body_snapshot,
+                        "more_body": True,
+                    }
+                if complete or len(body_snapshot) > 0 or pending is None:
+                    return {
+                        "type": "http.request",
+                        "body": body_snapshot,
+                        "more_body": False,
+                    }
+                pending_sent = True
+                return pending
+            if not pending_sent and pending is not None:
+                pending_sent = True
+                return pending
+            return await receive()
+
+        await self.app(scope, _replay, send)
 
 
 def _normalize_incoming_origin(value: str) -> str:
