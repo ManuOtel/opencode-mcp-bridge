@@ -2114,7 +2114,11 @@ class RequestBodyLimitMiddleware:
     counted and bodies over the limit get the same generic 413. Rejected
     requests never reach downstream tools. All other paths (including
     /health) and non-HTTP scopes pass through untouched. Buffered memory
-    stays bounded to the limit plus at most one over-limit chunk. The
+    stays bounded to the limit (plus one small control message): body
+    bytes are coalesced into a single bytearray, so an unbounded number
+    of empty or fragmented http.request messages cannot grow metadata
+    without bound. Downstream sees one coalesced http.request message
+    with identical bytes (chunk boundaries are not preserved). The
     413 body is generic and never echoes tokens, sizes, headers, or
     body bytes.
     """
@@ -2153,6 +2157,25 @@ class RequestBodyLimitMiddleware:
         await response(scope, receive, send)
 
     @staticmethod
+    def _chunk_bytes(message: Any) -> bytes:
+        """Return the body bytes of an http.request chunk safely.
+
+        Args:
+            message: ASGI message.
+
+        Returns:
+            Body bytes, or b"" for missing/non-bytes bodies.
+        """
+        if not isinstance(message, dict):
+            return b""
+        body = message.get("body", b"")
+        if isinstance(body, bytes):
+            return body
+        if isinstance(body, (bytearray, memoryview)):
+            return bytes(body)
+        return b""
+
+    @staticmethod
     def _chunk_len(message: Any) -> int:
         """Return the byte length of an http.request chunk safely.
 
@@ -2162,15 +2185,13 @@ class RequestBodyLimitMiddleware:
         Returns:
             Length of the body bytes, or 0 for missing/non-bytes bodies.
         """
-        if not isinstance(message, dict):
-            return 0
-        body = message.get("body", b"")
-        if isinstance(body, (bytes, bytearray, memoryview)):
-            return len(body)
-        return 0
+        return len(RequestBodyLimitMiddleware._chunk_bytes(message))
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         """Reject oversized declared and streamed bodies before downstream.
+
+        Body bytes are coalesced into one bounded bytearray; downstream
+        replays as a single http.request message with identical bytes.
 
         Args:
             scope: ASGI scope.
@@ -2194,29 +2215,49 @@ class RequestBodyLimitMiddleware:
             if declared > self._max_body_bytes:
                 await self._reject(scope, receive, send)
                 return
-        buffered: list[dict] = []
-        total = 0
+        buffered = bytearray()
+        pending: dict | None = None
+        complete = False
         while True:
             message = await receive()
             if not isinstance(message, dict) or message.get("type") != "http.request":
-                buffered.append(message if isinstance(message, dict) else {})
+                pending = message if isinstance(message, dict) else {}
                 break
-            total += self._chunk_len(message)
-            if total > self._max_body_bytes:
-                await self._reject(scope, receive, send)
-                return
-            buffered.append(message)
+            chunk = self._chunk_bytes(message)
+            if chunk:
+                if len(buffered) + len(chunk) > self._max_body_bytes:
+                    await self._reject(scope, receive, send)
+                    return
+                buffered.extend(chunk)
             if not message.get("more_body", False):
+                complete = True
                 break
-        index = 0
+        body_snapshot = bytes(buffered)
+        replayed = False
+        pending_sent = pending is None
 
         async def _replay() -> dict:
-            """Replay buffered messages, then delegate to the channel."""
-            nonlocal index
-            if index < len(buffered):
-                message = buffered[index]
-                index += 1
-                return message
+            """Replay coalesced body, then pending control, then channel."""
+            nonlocal replayed, pending_sent
+            if not replayed:
+                replayed = True
+                if pending is not None and len(body_snapshot) > 0:
+                    return {
+                        "type": "http.request",
+                        "body": body_snapshot,
+                        "more_body": True,
+                    }
+                if complete or len(body_snapshot) > 0 or pending is None:
+                    return {
+                        "type": "http.request",
+                        "body": body_snapshot,
+                        "more_body": False,
+                    }
+                pending_sent = True
+                return pending
+            if not pending_sent and pending is not None:
+                pending_sent = True
+                return pending
             return await receive()
 
         await self.app(scope, _replay, send)
