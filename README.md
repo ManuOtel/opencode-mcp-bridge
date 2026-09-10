@@ -565,7 +565,7 @@ Docker build. `ruff format` in write mode touches Python files: use
 Ready in this repo (no secrets committed):
 
 - `server.json`: schema-valid remote Streamable HTTP entry for
-  `io.github.manuotel/opencode-mcp-bridge`, safe `/worker-mcp`
+  `io.github.ManuOtel/opencode-mcp-bridge`, safe `/worker-mcp`
   only, auth as a required secret `Authorization` header. The URL
   `https://opencode-mcp.manuotel.com/worker-mcp` is the optional community
   demo endpoint operated by ManuOtel; it supplies no token. Self-host for

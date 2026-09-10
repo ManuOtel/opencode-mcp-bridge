@@ -40,7 +40,7 @@ def test_bridge_and_codex_plugin_share_version() -> None:
 def test_registry_metadata_tracks_release_and_advertises_demo_remote() -> None:
     """Registry metadata is version-coherent and advertises the demo HTTPS endpoint."""
     metadata = json.loads((REPO / "server.json").read_text())
-    assert metadata["name"] == "io.github.manuotel/opencode-mcp-bridge"
+    assert metadata["name"] == "io.github.ManuOtel/opencode-mcp-bridge"
     assert metadata["version"] == _bridge_version()
     assert metadata["repository"]["url"] == "https://github.com/ManuOtel/opencode-mcp-bridge"
     remotes = metadata["remotes"]

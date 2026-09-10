@@ -35,7 +35,7 @@ must never be used to distribute access credentials.
 4. Run `scripts/smoke.sh` against the operator's own endpoint.
 5. Run the official registry validation dry run. Do not publish from an
    unreviewed branch or from a dirty production checkout.
-6. Authenticate the correct `io.github.manuotel` namespace before publishing.
+6. Authenticate the correct `io.github.ManuOtel` namespace before publishing.
 
 The official registry validates namespace and package ownership in addition to
 the generic `server.json` schema. A schema-valid example is not proof that a
