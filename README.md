@@ -1,8 +1,11 @@
 # opencode-mcp-bridge
 
 MCP bridge for a self-hosted [`OpenCode`](https://opencode.ai) instance.
-It exposes OpenCode sessions, models, diffs, and server shell access as MCP
-tools over Streamable HTTP, so any MCP-compatible harness can drive it:
+It coordinates OpenCode workers over MCP; it does not replace OpenCode.
+You still run your own OpenCode server (`opencode serve` or `opencode web`)
+behind your own bridge. The bridge exposes OpenCode sessions, models, diffs,
+and server shell access as MCP tools over Streamable HTTP (remote HTTP only,
+no local stdio transport), so any MCP-compatible harness can drive it:
 ChatGPT (developer connectors), Claude Code, Codex, MCP Inspector, and more.
 
 This repo ships a Codex plugin (`opencode-worker`, see `.codex-plugin/`) with a
@@ -19,9 +22,12 @@ export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
 ./scripts/install-client.sh both
 ```
 
-The helper requires `OPENCODE_MCP_URL` and fails clearly when it is missing;
-it never falls back to anyone else's server. The maintainer demo endpoint is
-opt-in only (see [docs/client-setup.md](docs/client-setup.md) section 4).
+The helper requires `OPENCODE_MCP_URL` and `OPENCODE_MCP_BEARER_TOKEN` and
+fails clearly when either is missing or the URL is malformed (must be
+`http(s)://...` ending in `/mcp` or `/worker-mcp`); it never falls back to
+anyone else's server. The maintainer demo endpoint is only an example/shared
+service, opt-in only, and may require its own token (see
+[docs/client-setup.md](docs/client-setup.md) section 4).
 
 See [docs/client-setup.md](docs/client-setup.md) for copy/paste Codex and
 Claude Code commands, token handling, `/worker-mcp` vs `/mcp` URLs, and the
@@ -96,18 +102,18 @@ States: `running` (wait), `idle` (verify), `error`/`unknown` (recover, see
   `coordinate-opencode-worker` skill. Both variables must be exported before
   install. See [docs/client-setup.md](docs/client-setup.md) section 7. There
   is no npm or Brew package; both marketplaces install from this GitHub repo.
-- Claude Code (manual transport only, no skills): `claude mcp add --transport http opencode "$OPENCODE_MCP_URL" --header "Authorization: Bearer <token>"`
+- Claude Code (manual transport only, no skills): `claude mcp add --transport http opencode "$OPENCODE_MCP_URL" --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'` (env-var reference, never the token value).
 - Codex (manual transport only): `codex mcp add opencode --url "$OPENCODE_MCP_URL" --bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN`.
   The manifest is `.codex-plugin/plugin.json`; bundled MCP config is
   `.mcp.json` (server `opencode`, visible placeholder
   `https://YOUR-BRIDGE-HOST/worker-mcp`, worker-only tools). Codex does not
   interpolate env vars in plugin server URLs, so register your own transport
   per machine as above; the placeholder fails loudly if ever used directly.
-- Other clients: add an MCP server with an `Authorization: Bearer <token>` header.
+- Other clients: add an MCP server with an `Authorization: Bearer` header referencing your own token env var.
   Existing clients keep the full catalog at `https://<your-domain>/mcp`;
   worker-only clients use `https://<your-domain>/worker-mcp`. Both paths share
-  the same Bearer token.
-  - Claude Code: `claude mcp add --transport http opencode-bridge https://<your-domain>/mcp --header "Authorization: Bearer <token>"`
+  the same Bearer token. Remote HTTP only; there is no local stdio command.
+  - Claude Code: `claude mcp add --transport http opencode-bridge "$OPENCODE_MCP_URL" --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'`
   - ChatGPT: Developer Mode ON > Connectors > Create connector, URL mode with
     `https://<your-domain>/mcp` + Bearer token, then Scan Tools.
   - Debug: MCP Inspector or `./scripts/smoke.sh` (see script header).

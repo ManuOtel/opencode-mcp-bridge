@@ -93,3 +93,11 @@ def test_official_docs_links() -> None:
     text = _text()
     assert "docs.github.com" in text
     assert "learn.microsoft.com" in text
+
+
+def test_copilot_scope_is_bridge_coordinates_not_replaces() -> None:
+    """Copilot guide states the supported connector scope and worker coordination."""
+    text = _text()
+    flat = " ".join(text.split()).lower()
+    assert "does not replace opencode" in flat
+    assert "only the connector path supported" in flat

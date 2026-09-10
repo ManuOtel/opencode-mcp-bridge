@@ -6,7 +6,7 @@ This guide covers three distinct cases. Do not conflate them. Each case has its 
 - Case 2: Microsoft Copilot Studio, through an MCP tool on your own agent.
 - Case 3: Microsoft 365 Copilot, through a declarative agent or an admin-approved extension.
 
-This repo does not host OpenCode for you. You host your own bridge and your own OpenCode server. Then you connect a Copilot product to your own bridge URL.
+This repo does not host OpenCode for you. You host your own bridge and your own OpenCode server. Then you connect a Copilot product to your own bridge URL. The bridge coordinates OpenCode workers; it does not replace OpenCode. This guide documents only the connector path supported by this repository (your own Streamable HTTP bridge URL plus your own Bearer token); it does not cover other Copilot extensions or OAuth flows.
 
 ## Own-bridge-first rule
 

@@ -15,6 +15,9 @@ Modes: codex, claude, both (required, first argument).
 Options: --name <name> (optional MCP server name, default: opencode).
 Env: OPENCODE_MCP_URL (required, your own bridge URL, e.g. https://<your-domain>/worker-mcp),
      OPENCODE_MCP_BEARER_TOKEN (required, never echoed).
+URL must start with http:// or https:// and must end with /mcp or /worker-mcp.
+Codex stores a bearer-token env-var reference. Claude stores a
+Bearer ${OPENCODE_MCP_BEARER_TOKEN} reference (never the token value).
 USAGE
 }
 
@@ -63,6 +66,24 @@ if [ -z "${OPENCODE_MCP_URL:-}" ]; then
 fi
 MCP_URL="$OPENCODE_MCP_URL"
 
+case "$MCP_URL" in
+  http://*|https://*)
+    ;;
+  *)
+    echo "error: OPENCODE_MCP_URL must start with http:// or https://" >&2
+    exit 1
+    ;;
+esac
+
+case "$MCP_URL" in
+  */worker-mcp|*/mcp)
+    ;;
+  *)
+    echo "error: OPENCODE_MCP_URL must end with /worker-mcp or /mcp" >&2
+    exit 1
+    ;;
+esac
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "error: required command not found: $1" >&2
@@ -86,8 +107,8 @@ if [ "$MODE" = "codex" ] || [ "$MODE" = "both" ]; then
 fi
 
 if [ "$MODE" = "claude" ] || [ "$MODE" = "both" ]; then
-  echo "warning: Claude Code HTTP header configuration may persist the token locally" >&2
-  claude mcp add --transport http "$NAME" "$MCP_URL" --header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"
+  echo "warning: Claude Code stores a Bearer \${OPENCODE_MCP_BEARER_TOKEN} reference; keep the variable exported" >&2
+  claude mcp add --transport http "$NAME" "$MCP_URL" --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}'
 fi
 
 echo "done: registered '$NAME' at $MCP_URL for mode '$MODE'"
