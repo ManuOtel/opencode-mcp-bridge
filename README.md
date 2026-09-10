@@ -231,9 +231,11 @@ Session and utility tools:
 - `/health` is the only unauthenticated endpoint (reverse-proxy checks). Everything
   under `/mcp` and `/worker-mcp` requires the same Bearer token.
 - Request-body limit: `MCP_MAX_BODY_BYTES` (default 1048576, 1 MiB) caps the
-  declared `Content-Length` on `/mcp` and `/worker-mcp`. Oversized requests
-  get a generic 413 before any tool runs; absent or malformed lengths pass
-  through. Auth still runs first, so missing tokens stay 401.
+  declared `Content-Length` and the actual streamed body on `/mcp` and
+  `/worker-mcp`. Oversized requests get a generic 413 before any tool runs;
+  absent, malformed, or under-declared lengths are still counted as
+  chunked/streamed bytes with bounded buffering. Auth still runs first,
+  so missing tokens stay 401.
 - Browser-origin allowlist (optional): `MCP_ALLOWED_ORIGINS` is a
   comma-separated exact-origin list (`scheme://host[:port]`, http/https,
   no path/query/fragment) for `/mcp` and `/worker-mcp`. Unset or blank
@@ -281,7 +283,7 @@ Check it: `curl http://127.0.0.1:8087/health` should report OpenCode healthy.
 | `EXEC_MAX_OUTPUT_CHARS` | `20000` | Output truncation cap for `exec_run`. |
 | `ENABLE_EXEC_RUN` | `false` | Opt-in for `exec_run` on `/mcp`. Set `true` only where a shell is intended. |
 | `TASK_STATE_PATH` | `/var/lib/opencode-mcp-bridge/tasks.json` | JSON registry for durable tasks (atomic writes, bounded records, no prompts or secrets). |
-| `MCP_MAX_BODY_BYTES` | `1048576` | Max declared request body (bytes) for `/mcp` and `/worker-mcp`; oversized returns generic 413. |
+| `MCP_MAX_BODY_BYTES` | `1048576` | Max request body (bytes) for `/mcp` and `/worker-mcp`, declared and streamed; oversized returns generic 413. |
 | `MCP_ALLOWED_ORIGINS` | (unset) | Optional exact-origin allowlist for `/mcp` and `/worker-mcp`; unset/blank disables. Single trailing slash stripped. |
 
 Put a reverse proxy with TLS in front. Traefik example: `deploy/traefik-opencode-mcp.yaml`.

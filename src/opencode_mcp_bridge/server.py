@@ -2106,12 +2106,17 @@ def _truncate(text: str, cap: int) -> str:
 class RequestBodyLimitMiddleware:
     """ASGI middleware rejecting oversized MCP request bodies early.
 
-    Enforces MCP_MAX_BODY_BYTES on declared Content-Length for /mcp and
-    /worker-mcp before FastMCP/tool handling. Oversized requests get a
-    generic 413 and never reach downstream tools. Requests with an absent
-    or malformed Content-Length pass through (chunked/unknown length is
-    handled downstream). All other paths (including /health) pass through
-    untouched. The 413 body is generic and never echoes tokens or sizes.
+    Enforces MCP_MAX_BODY_BYTES on declared Content-Length and on the
+    actual streamed body for /mcp and /worker-mcp before FastMCP/tool
+    handling. Declared oversized lengths get an immediate generic 413;
+    absent, malformed, negative, or under-limit declarations fall through
+    to bounded streaming enforcement where http.request chunks are
+    counted and bodies over the limit get the same generic 413. Rejected
+    requests never reach downstream tools. All other paths (including
+    /health) and non-HTTP scopes pass through untouched. Buffered memory
+    stays bounded to the limit plus at most one over-limit chunk. The
+    413 body is generic and never echoes tokens, sizes, headers, or
+    body bytes.
     """
 
     def __init__(self, app: Any, max_body_bytes: int) -> None:
@@ -2119,7 +2124,7 @@ class RequestBodyLimitMiddleware:
 
         Args:
             app: Downstream ASGI app.
-            max_body_bytes: Max declared Content-Length in bytes.
+            max_body_bytes: Max request body in bytes (declared or streamed).
 
         Raises:
             RuntimeError: If the limit is not a positive integer.
@@ -2129,8 +2134,43 @@ class RequestBodyLimitMiddleware:
         self.app = app
         self._max_body_bytes = max_body_bytes
 
+    async def _reject(self, scope: Any, receive: Any, send: Any) -> None:
+        """Send a generic 413 without echoing request or config values.
+
+        Args:
+            scope: ASGI scope.
+            receive: ASGI receive channel.
+            send: ASGI send channel.
+        """
+        observability.emit(
+            event=observability.EVENT_AUTH,
+            tool=observability.TOOL_AUTH,
+            outcome=observability.OUTCOME_REJECTED,
+            error_class="PayloadTooLarge",
+            status_code=413,
+        )
+        response = JSONResponse({"error": "payload too large"}, status_code=413)
+        await response(scope, receive, send)
+
+    @staticmethod
+    def _chunk_len(message: Any) -> int:
+        """Return the byte length of an http.request chunk safely.
+
+        Args:
+            message: ASGI message.
+
+        Returns:
+            Length of the body bytes, or 0 for missing/non-bytes bodies.
+        """
+        if not isinstance(message, dict):
+            return 0
+        body = message.get("body", b"")
+        if isinstance(body, (bytes, bytearray, memoryview)):
+            return len(body)
+        return 0
+
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        """Reject oversized bodies by declared Content-Length.
+        """Reject oversized declared and streamed bodies before downstream.
 
         Args:
             scope: ASGI scope.
@@ -2146,29 +2186,40 @@ class RequestBodyLimitMiddleware:
             return
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
         raw = headers.get(b"content-length")
-        if raw is None:
-            await self.app(scope, receive, send)
-            return
-        try:
-            declared = int(raw.decode().strip())
-        except (ValueError, UnicodeDecodeError, AttributeError):
-            await self.app(scope, receive, send)
-            return
-        if declared < 0:
-            await self.app(scope, receive, send)
-            return
-        if declared > self._max_body_bytes:
-            observability.emit(
-                event=observability.EVENT_AUTH,
-                tool=observability.TOOL_AUTH,
-                outcome=observability.OUTCOME_REJECTED,
-                error_class="PayloadTooLarge",
-                status_code=413,
-            )
-            response = JSONResponse({"error": "payload too large"}, status_code=413)
-            await response(scope, receive, send)
-            return
-        await self.app(scope, receive, send)
+        if raw is not None:
+            try:
+                declared = int(raw.decode().strip())
+            except (ValueError, UnicodeDecodeError, AttributeError):
+                declared = -1
+            if declared > self._max_body_bytes:
+                await self._reject(scope, receive, send)
+                return
+        buffered: list[dict] = []
+        total = 0
+        while True:
+            message = await receive()
+            if not isinstance(message, dict) or message.get("type") != "http.request":
+                buffered.append(message if isinstance(message, dict) else {})
+                break
+            total += self._chunk_len(message)
+            if total > self._max_body_bytes:
+                await self._reject(scope, receive, send)
+                return
+            buffered.append(message)
+            if not message.get("more_body", False):
+                break
+        index = 0
+
+        async def _replay() -> dict:
+            """Replay buffered messages, then delegate to the channel."""
+            nonlocal index
+            if index < len(buffered):
+                message = buffered[index]
+                index += 1
+                return message
+            return await receive()
+
+        await self.app(scope, _replay, send)
 
 
 def _normalize_incoming_origin(value: str) -> str:
