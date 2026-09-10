@@ -271,3 +271,37 @@ worker clients; reserve `/mcp` for legacy full-catalog use.
 
 Both endpoints share the same Bearer token and rotation procedure.
 `/health` stays open for reverse-proxy checks.
+
+Optional browser-origin policy: set `MCP_ALLOWED_ORIGINS` in the
+deployment env file (same `0640` file as the tokens) as comma-separated
+exact origins (`scheme://host[:port]`, http/https, no path/query/fragment;
+a single trailing slash is stripped). Unset or blank disables the policy.
+When enabled, it applies only to `/mcp` and `/worker-mcp` after auth: a
+present `Origin` must match exactly, `Origin`-absent requests fall back to
+deriving the `Referer` origin (malformed `Referer` is rejected), and absent
+`Origin` plus absent `Referer` stays allowed for CLI/SDK clients. Missing
+tokens still return 401; disallowed browser requests return generic 403.
+Verify after enabling (replace the origin with one of your configured
+values for the allowed case):
+
+```bash
+for path in mcp worker-mcp; do
+  curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$BASE/$path" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'Origin: https://allowed.example' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+  curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$BASE/$path" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $MCP_BEARER_TOKEN" \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'Origin: https://evil.example' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+done
+```
+
+Expect `200` for the configured origin and generic `403` for the other,
+on both paths. Requests without `Origin`/`Referer` must still return
+`200` with a valid token, and requests without a token must still return
+`401` regardless of `Origin`.

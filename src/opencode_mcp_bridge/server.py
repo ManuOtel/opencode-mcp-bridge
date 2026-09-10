@@ -23,6 +23,7 @@ import time
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import uvicorn
 from fastmcp import FastMCP
@@ -2170,6 +2171,59 @@ class RequestBodyLimitMiddleware:
         await self.app(scope, receive, send)
 
 
+def _normalize_incoming_origin(value: str) -> str:
+    """Normalize an incoming Origin value for exact comparison.
+
+    Strips surrounding whitespace and a single trailing "/" (the same
+    rule used for MCP_ALLOWED_ORIGINS entries). No other normalization
+    is applied; matching stays exact and case-sensitive.
+
+    Args:
+        value: Raw Origin header value.
+
+    Returns:
+        Normalized origin string.
+    """
+    cleaned = value.strip()
+    if cleaned.endswith("/") and len(cleaned) > 1:
+        return cleaned[:-1]
+    return cleaned
+
+
+def _origin_from_referer(value: str) -> str | None:
+    """Derive an origin from a Referer header value.
+
+    Parses the Referer as a URL and returns "scheme://host[:port]"
+    preserving the Referer hostport exactly. Returns None when the
+    value is malformed (missing http/https scheme, missing host,
+    embedded userinfo, bad port, or whitespace).
+
+    Args:
+        value: Raw Referer header value.
+
+    Returns:
+        Derived origin string, or None when malformed.
+    """
+    cleaned = value.strip()
+    if not cleaned or any(ch.isspace() for ch in cleaned):
+        return None
+    try:
+        parsed = urlparse(cleaned)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return None
+    if not parsed.netloc or "@" in parsed.netloc:
+        return None
+    if not parsed.hostname:
+        return None
+    try:
+        _ = parsed.port
+    except ValueError:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 class BearerAuthMiddleware:
     """ASGI middleware requiring a static Bearer token, except health.
 
@@ -2179,6 +2233,14 @@ class BearerAuthMiddleware:
     Accepts one primary token plus an optional secondary rotation token;
     every candidate is compared with hmac.compare_digest (no early exit)
     and validation fails closed. Token values are never logged.
+
+    When allowed_origins is non-empty, an additional browser-origin
+    policy applies to /mcp and /worker-mcp only, after authentication:
+    a present Origin must exactly match the allowlist; when Origin is
+    absent, a present Referer must derive to an allowed origin, and
+    malformed Referer values are rejected. Absent Origin and Referer
+    stays allowed for CLI/SDK compatibility. /health and other paths
+    never check origins.
     """
 
     def __init__(
@@ -2186,6 +2248,7 @@ class BearerAuthMiddleware:
         app: Any,
         token: str | list[str] | tuple[str, ...],
         extra_tokens: list[str] | tuple[str, ...] | None = None,
+        allowed_origins: tuple[str, ...] | list[str] | None = None,
     ) -> None:
         """Create the middleware.
 
@@ -2196,6 +2259,9 @@ class BearerAuthMiddleware:
                 arg for backward compatibility.
             extra_tokens: Optional extra accepted tokens (e.g. secondary
                 rotation token). Ignored when token is already a list.
+            allowed_origins: Optional exact-origin allowlist for
+                browser-facing MCP requests. Empty/None disables the
+                origin policy entirely.
         """
         if isinstance(token, (list, tuple)):
             accepted = [t for t in token if isinstance(t, str) and t.strip()]
@@ -2208,6 +2274,8 @@ class BearerAuthMiddleware:
             raise RuntimeError("Bearer auth misconfigured: no tokens available")
         self.app = app
         self._expected_tokens: tuple[bytes, ...] = tuple(t.encode() for t in accepted)
+        self._allowed_origins: tuple[str, ...] = tuple(allowed_origins or ())
+        self._allowed_origin_set: frozenset[str] = frozenset(self._allowed_origins)
 
     def _is_authorized(self, presented: bytes) -> bool:
         """Compare a presented token against all accepted tokens.
@@ -2258,6 +2326,33 @@ class BearerAuthMiddleware:
             response = JSONResponse({"error": "unauthorized"}, status_code=401)
             await response(scope, receive, send)
             return
+        if normalized in ("/mcp", "/worker-mcp") and self._allowed_origin_set:
+            origin_raw = headers.get(b"origin", b"").decode("latin-1").strip()
+            if origin_raw:
+                if _normalize_incoming_origin(origin_raw) not in self._allowed_origin_set:
+                    observability.emit(
+                        event=observability.EVENT_AUTH,
+                        tool=observability.TOOL_AUTH,
+                        outcome=observability.OUTCOME_REJECTED,
+                        error_class="Forbidden",
+                    )
+                    response = JSONResponse({"error": "forbidden"}, status_code=403)
+                    await response(scope, receive, send)
+                    return
+            else:
+                referer_raw = headers.get(b"referer", b"").decode("latin-1").strip()
+                if referer_raw:
+                    derived = _origin_from_referer(referer_raw)
+                    if derived is None or derived not in self._allowed_origin_set:
+                        observability.emit(
+                            event=observability.EVENT_AUTH,
+                            tool=observability.TOOL_AUTH,
+                            outcome=observability.OUTCOME_REJECTED,
+                            error_class="Forbidden",
+                        )
+                        response = JSONResponse({"error": "forbidden"}, status_code=403)
+                        await response(scope, receive, send)
+                        return
         await self.app(scope, receive, send)
 
 
@@ -2322,7 +2417,11 @@ def create_app() -> Any:
         lifespan=combined_lifespan,
     )
     limited = RequestBodyLimitMiddleware(outer, settings.mcp_max_body_bytes)
-    return BearerAuthMiddleware(limited, accepted_bearer_tokens(settings))
+    return BearerAuthMiddleware(
+        limited,
+        accepted_bearer_tokens(settings),
+        allowed_origins=settings.allowed_origins,
+    )
 
 
 def main() -> None:

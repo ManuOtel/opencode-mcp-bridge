@@ -14,6 +14,7 @@ import hmac
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _load_dotenv(dotenv_path: Path | None = None) -> None:
@@ -70,6 +71,7 @@ class Settings:
     task_state_path: str
     enable_exec_run: bool
     mcp_max_body_bytes: int
+    allowed_origins: tuple[str, ...]
 
 
 def _normalize_dir(raw: str | None, fallback: str) -> str:
@@ -253,6 +255,84 @@ def accepted_bearer_tokens(settings: Settings) -> tuple[str, ...]:
     return (settings.mcp_bearer_token,)
 
 
+def _normalize_origin_entry(entry: str) -> str:
+    """Strip one trailing slash from an origin entry.
+
+    Only a single trailing "/" is removed (e.g. "https://a.example/"
+    becomes "https://a.example"). Anything else, including a double
+    trailing slash, stays for strict validation to reject.
+
+    Args:
+        entry: Stripped origin entry.
+
+    Returns:
+        Entry with at most one trailing slash removed.
+    """
+    if entry.endswith("/") and len(entry) > 1:
+        return entry[:-1]
+    return entry
+
+
+def _parse_allowed_origins(raw: str | None) -> tuple[str, ...]:
+    """Parse MCP_ALLOWED_ORIGINS as an exact-origin allowlist.
+
+    Unset, blank, or comma-blank values mean no origin policy (empty
+    tuple, fully backward compatible). Otherwise each comma-separated
+    entry must be exactly "scheme://host[:port]" with an http/https
+    scheme, no userinfo, no path, query, or fragment, and no
+    whitespace. A single trailing slash is stripped before validation.
+    The allowlist is never inferred from Host, request URL, or
+    deployment configuration.
+
+    Args:
+        raw: Raw env value, or None when unset.
+
+    Returns:
+        Tuple of allowed origins in first-seen order, deduplicated.
+
+    Raises:
+        RuntimeError: If any non-blank entry is malformed. Messages
+            carry the variable name only, never origin values.
+    """
+    if raw is None:
+        return ()
+    if not raw.strip():
+        return ()
+    allowed: list[str] = []
+    seen: set[str] = set()
+    has_entry = False
+    for part in raw.split(","):
+        cleaned = part.strip()
+        if not cleaned:
+            continue
+        has_entry = True
+        if any(ch.isspace() for ch in cleaned):
+            raise RuntimeError("Invalid MCP_ALLOWED_ORIGINS: malformed origin entry")
+        normalized = _normalize_origin_entry(cleaned)
+        try:
+            parsed = urlparse(normalized)
+        except ValueError:
+            raise RuntimeError("Invalid MCP_ALLOWED_ORIGINS: malformed origin entry")
+        if parsed.scheme not in ("http", "https"):
+            raise RuntimeError("Invalid MCP_ALLOWED_ORIGINS: malformed origin entry")
+        if not parsed.netloc or "@" in parsed.netloc:
+            raise RuntimeError("Invalid MCP_ALLOWED_ORIGINS: malformed origin entry")
+        if parsed.path or parsed.query or parsed.fragment or parsed.params:
+            raise RuntimeError("Invalid MCP_ALLOWED_ORIGINS: malformed origin entry")
+        if not parsed.hostname:
+            raise RuntimeError("Invalid MCP_ALLOWED_ORIGINS: malformed origin entry")
+        try:
+            _ = parsed.port
+        except ValueError:
+            raise RuntimeError("Invalid MCP_ALLOWED_ORIGINS: malformed origin entry")
+        if normalized not in seen:
+            seen.add(normalized)
+            allowed.append(normalized)
+    if not has_entry:
+        return ()
+    return tuple(allowed)
+
+
 def load_settings(dotenv_path: Path | None = None) -> Settings:
     """Load settings from environment, optionally reading a .env file first.
 
@@ -281,6 +361,7 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
     allowed = _parse_allowed_directories(os.environ.get("ALLOWED_DIRECTORIES"), normalized_default)
     primary_token = _required("MCP_BEARER_TOKEN")
     secondary_token = _optional_secondary_token("MCP_BEARER_TOKEN_SECONDARY", primary_token)
+    allowed_origins = _parse_allowed_origins(os.environ.get("MCP_ALLOWED_ORIGINS"))
     return Settings(
         opencode_base_url=os.environ.get("OPENCODE_BASE_URL", "http://127.0.0.1:4096").rstrip("/"),
         opencode_username=os.environ.get("OPENCODE_SERVER_USERNAME", "opencode"),
@@ -300,4 +381,5 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         ),
         enable_exec_run=_as_bool(os.environ.get("ENABLE_EXEC_RUN"), default=False),
         mcp_max_body_bytes=max_body_bytes,
+        allowed_origins=allowed_origins,
     )

@@ -19,6 +19,11 @@ In scope are faults in this repository in the following areas:
 - Token rotation with `MCP_BEARER_TOKEN_SECONDARY`.
 - Request-body size limit (`MCP_MAX_BODY_BYTES`, default 1 MiB) on `/mcp`
   and `/worker-mcp` with generic 413 before tool handling.
+- Optional browser-origin allowlist (`MCP_ALLOWED_ORIGINS`) on `/mcp` and
+  `/worker-mcp`: exact origins only, no `Origin` means CLI/SDK passthrough,
+  `Referer`-only derives and checks its origin, malformed `Referer` fails
+  closed, auth runs first (missing tokens stay 401), `/health` exempt,
+  rejections are generic 403 with no secret or header echo.
 - The `exec_run` opt-in gate (`ENABLE_EXEC_RUN`).
 - Tool access boundaries between `/mcp` and `/worker-mcp`.
 - Unsafe handling of paths, commands, or logs by the bridge code.

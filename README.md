@@ -234,6 +234,16 @@ Session and utility tools:
   declared `Content-Length` on `/mcp` and `/worker-mcp`. Oversized requests
   get a generic 413 before any tool runs; absent or malformed lengths pass
   through. Auth still runs first, so missing tokens stay 401.
+- Browser-origin allowlist (optional): `MCP_ALLOWED_ORIGINS` is a
+  comma-separated exact-origin list (`scheme://host[:port]`, http/https,
+  no path/query/fragment) for `/mcp` and `/worker-mcp`. Unset or blank
+  means no origin policy. A single trailing slash is stripped. When set, a
+  present `Origin` must match exactly; when `Origin` is absent, a present
+  `Referer` must derive to an allowed origin and malformed `Referer`
+  values are rejected. Absent `Origin` and `Referer` stays allowed for
+  CLI/SDK clients. Auth runs first (missing tokens stay 401), `/health`
+  never checks origins, rejections are generic 403 with no secret or
+  header echo, and the list is never inferred from `Host` or request URL.
 - Approval profile: writes prompt (`worker_run`, `worker_cleanup`, `exec_run`,
   `send_message`), reads auto-approve (`worker_status`, `worker_catalog`,
   `worker_verify`, `list_*`, `get_*`). Tighten to prompt-everything on shared hosts.
@@ -272,6 +282,7 @@ Check it: `curl http://127.0.0.1:8087/health` should report OpenCode healthy.
 | `ENABLE_EXEC_RUN` | `false` | Opt-in for `exec_run` on `/mcp`. Set `true` only where a shell is intended. |
 | `TASK_STATE_PATH` | `/var/lib/opencode-mcp-bridge/tasks.json` | JSON registry for durable tasks (atomic writes, bounded records, no prompts or secrets). |
 | `MCP_MAX_BODY_BYTES` | `1048576` | Max declared request body (bytes) for `/mcp` and `/worker-mcp`; oversized returns generic 413. |
+| `MCP_ALLOWED_ORIGINS` | (unset) | Optional exact-origin allowlist for `/mcp` and `/worker-mcp`; unset/blank disables. Single trailing slash stripped. |
 
 Put a reverse proxy with TLS in front. Traefik example: `deploy/traefik-opencode-mcp.yaml`.
 Host systemd keeps full terminal access for `exec_run` (see
