@@ -11,9 +11,13 @@ Bearer authentication (remote HTTP only; there is no local stdio
 transport). It coordinates OpenCode workers; it does not replace
 OpenCode.
 
-This is not a hosted OpenCode service. Each user provides an OpenCode
-server, or uses one they control, plus their own bridge deployment and
-token. Placeholder and demo URLs in this repo are not usable servers.
+This is not a hosted OpenCode service for production. Each user should
+self-host for production: provide an OpenCode server, or use one they
+control, plus their own bridge deployment and token. The project includes
+an optional community demo endpoint operated by ManuOtel at
+`https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp` only); it
+requires its own token and is not for production. Placeholder URLs such as
+`https://YOUR-BRIDGE-HOST/worker-mcp` are not usable servers.
 
 ## Section map
 
@@ -56,9 +60,11 @@ Rules for every example in this file:
   exactly five worker tools and never includes `exec_run`.
 - `https://<your-domain>/mcp` exposes the full legacy catalog, including
   `exec_run` when the operator enables it. Use it only for legacy clients.
-- `https://YOUR-BRIDGE-HOST/worker-mcp` (as shipped in `.mcp.json`) and
-  any demo URL are placeholders. They fail loudly by design. Always
-  register your own URL per machine.
+- `https://YOUR-BRIDGE-HOST/worker-mcp` (as shipped in `.mcp.json`) is a
+  placeholder. It fails loudly by design. Always register your own URL
+  per machine for production. The optional community demo endpoint
+  `https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp` only) is
+  operated by ManuOtel, requires its own token, and is not for production.
 - Generate a fresh token with
   `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`.
 
@@ -71,7 +77,9 @@ to anyone else's server. Full Codex and Claude Code steps live in
 have their own guide at [docs/copilot-setup.md](docs/copilot-setup.md).
 For the public registry metadata and publication checklist, see
 [docs/registry.md](docs/registry.md). The registry entry describes the
-software; it never supplies a hosted bridge or access token.
+software and advertises the optional community demo endpoint operated by
+ManuOtel; it never supplies a token. Self-host for production with your
+own token.
 
 ## Endpoints
 
@@ -559,8 +567,9 @@ Ready in this repo (no secrets committed):
 - `server.json`: schema-valid remote Streamable HTTP entry for
   `io.github.manuotel/opencode-mcp-bridge`, safe `/worker-mcp`
   only, auth as a required secret `Authorization` header. The URL
-  `https://example.invalid/worker-mcp` is a placeholder that fails
-  loudly; it describes the software, never a hosted server or token.
+  `https://opencode-mcp.manuotel.com/worker-mcp` is the optional community
+  demo endpoint operated by ManuOtel; it supplies no token. Self-host for
+  production with your own token.
 - `glama.json`: maintainer claim for `ManuOtel`, nothing else.
 - Smithery: no checked-in file needed; URL publishing is a
   dashboard/CLI flow. Full checklist:
@@ -569,8 +578,9 @@ Ready in this repo (no secrets committed):
 Still requires a human owner login (not done by this change):
 
 - MCP Registry: `mcp-publisher login github` as `ManuOtel`, then
-  `validate` and `publish` with your real HTTPS endpoint swapped
-  into the publish input only. Start here:
+  `validate` and `publish` the checked-in `server.json`, which advertises
+  `https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp` only).
+  Start here:
   [publishing quickstart](https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/quickstart.mdx),
   [server.json spec](https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/server-json/generic-server-json.md),
   [live API docs](https://registry.modelcontextprotocol.io/docs).
@@ -585,10 +595,11 @@ Still requires a human owner login (not done by this change):
   needs manual review during the Smithery scan.
 
 Listing versus hosting: a registry entry lists the open-source
-bridge (repo, docs, install). It never grants access to anyone's
-private deployment. Advertising a hosted instance means publishing
-YOUR own HTTPS URL, owning that domain, and issuing your own
-tokens. There is no permanent public hosted service in this repo.
+bridge (repo, docs, install). It never grants access or supplies a token.
+The project includes an optional community demo endpoint operated by
+ManuOtel at `https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp`
+only); production users should self-host with their own HTTPS URL and
+token.
 
 Endpoint reminder: `/worker-mcp` (five worker tools, no shell) is
 the default for all new clients; `/mcp` (full legacy catalog,

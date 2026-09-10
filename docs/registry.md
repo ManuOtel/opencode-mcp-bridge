@@ -1,29 +1,35 @@
 # MCP Registry publication
 
-The root `server.json` is a checked-in metadata example for the official MCP
+The root `server.json` is the publication metadata for the official MCP
 Registry. It describes this repository and its Streamable HTTP transport.
-It is not a hosted service and it does not grant access to a bridge.
+It advertises the optional community demo endpoint operated by ManuOtel
+(`https://opencode-mcp.manuotel.com/worker-mcp`, `/worker-mcp` only); it
+does not grant access and it contains no token. Users must supply their
+own token. Self-host for production.
 
-The remote URL is `https://example.invalid/worker-mcp` on purpose. Replace it
-with the operator's real HTTPS endpoint only in a publication-specific change.
-Never commit a private endpoint, bearer token, or shared deployment address.
+The remote URL is `https://opencode-mcp.manuotel.com/worker-mcp`. Never
+commit a private endpoint, bearer token, or credential. The demo endpoint
+requires its own token; production users must self-host with their own
+`OPENCODE_MCP_BEARER_TOKEN`.
 
 ## Two separate things
 
 - The public registry entry points users to this repository, its plugins, and
   its installation documentation.
-- A private self-hosted endpoint runs the bridge and requires that operator's
-  own `OPENCODE_MCP_BEARER_TOKEN`.
+- For production, a self-hosted endpoint runs the bridge and requires that
+  operator's own `OPENCODE_MCP_BEARER_TOKEN`.
 
-Users must run OpenCode and the bridge themselves. The registry must never be
-used to distribute access credentials.
+Production users must run OpenCode and the bridge themselves. The registry
+must never be used to distribute access credentials.
 
 ## Publication checklist
 
 1. Choose the release version and update `pyproject.toml`, both plugin
    manifests, the Claude marketplace entry, `server.json`, and `CHANGELOG.md`.
-2. Replace the example remote only in the publication input. Confirm that it
-   is HTTPS, owned by the publisher, and does not contain credentials.
+2. Confirm the advertised remote is
+   `https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp` only).
+   Confirm that it is HTTPS, owned by the publisher, and does not contain
+   credentials or a token.
 3. Run `python3 -m json.tool server.json`,
    `python3 -m json.tool glama.json`, and the full repository checks.
 4. Run `scripts/smoke.sh` against the operator's own endpoint.

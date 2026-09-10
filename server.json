@@ -12,7 +12,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://example.invalid/worker-mcp",
+      "url": "https://opencode-mcp.manuotel.com/worker-mcp",
       "headers": [
         {
           "name": "Authorization",
