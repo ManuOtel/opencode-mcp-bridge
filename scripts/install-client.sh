@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Register your own OpenCode bridge worker MCP on Codex and/or Claude Code.
-# Usage: OPENCODE_MCP_URL=... OPENCODE_MCP_BEARER_TOKEN=... ./scripts/install-client.sh [codex|claude|both] [--name <name>]
+# Usage: OPENCODE_MCP_URL=... OPENCODE_MCP_BEARER_TOKEN=... ./scripts/install-client.sh [codex|claude|both] [--name <name>] [--dry-run]
 set -euo pipefail
 
 DEFAULT_NAME="opencode"
 MODE="${1:-}"
 NAME="$DEFAULT_NAME"
+DRY_RUN=0
 
 usage() {
   cat <<'USAGE'
-Usage: OPENCODE_MCP_URL=... OPENCODE_MCP_BEARER_TOKEN=... ./scripts/install-client.sh [codex|claude|both] [--name <name>]
+Usage: OPENCODE_MCP_URL=... OPENCODE_MCP_BEARER_TOKEN=... ./scripts/install-client.sh [codex|claude|both] [--name <name>] [--dry-run]
 
 Modes: codex, claude, both (required, first argument).
 Options: --name <name> (optional MCP server name, default: opencode).
+         --dry-run (validate inputs and print the planned registration without invoking codex/claude).
 Env: OPENCODE_MCP_URL (required, your own bridge URL, e.g. https://<your-domain>/worker-mcp),
      OPENCODE_MCP_BEARER_TOKEN (required, never echoed).
 URL must start with http:// or https:// and must end with /mcp or /worker-mcp.
@@ -42,6 +44,10 @@ while [ "$#" -gt 0 ]; do
       fi
       NAME="$2"
       shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
       ;;
     -h|--help)
       usage
@@ -90,6 +96,13 @@ need_cmd() {
     return 1
   fi
 }
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "dry-run: mode='$MODE' name='$NAME' url='$MCP_URL'"
+  echo "dry-run: OPENCODE_MCP_BEARER_TOKEN will be referenced (value never printed)"
+  echo "dry-run: no changes made (codex/claude not invoked)"
+  exit 0
+fi
 
 case "$MODE" in
   codex|both)
