@@ -25,7 +25,8 @@ token. Placeholder and demo URLs in this repo are not usable servers.
 6. [Security](#security)
 7. [Local deployment](#local-deployment)
 8. [Contributor workflow](#contributor-workflow)
-9. [Community and license](#community-and-license)
+9. [Publish and discover](#publish-and-discover)
+10. [Community and license](#community-and-license)
 
 ## Quick start (60 seconds)
 
@@ -535,6 +536,49 @@ and pushes to master across Python 3.11, 3.12, and 3.13, plus JSON
 validation of the Codex and Claude plugin manifests and a no-push
 Docker build. `ruff format` in write mode touches Python files: use
 `--check` only and report failures instead of fixing them here.
+
+## Publish and discover
+
+Ready in this repo (no secrets committed):
+
+- `server.json`: schema-valid remote Streamable HTTP entry for
+  `io.github.manuotel/opencode-mcp-bridge`, safe `/worker-mcp`
+  only, auth as a required secret `Authorization` header. The URL
+  `https://example.invalid/worker-mcp` is a placeholder that fails
+  loudly; it describes the software, never a hosted server or token.
+- `glama.json`: maintainer claim for `ManuOtel`, nothing else.
+- Smithery: no checked-in file needed; URL publishing is a
+  dashboard/CLI flow. Full checklist:
+  [docs/registry.md](docs/registry.md).
+
+Still requires a human owner login (not done by this change):
+
+- MCP Registry: `mcp-publisher login github` as `ManuOtel`, then
+  `validate` and `publish` with your real HTTPS endpoint swapped
+  into the publish input only. Start here:
+  [publishing quickstart](https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/quickstart.mdx),
+  [server.json spec](https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/server-json/generic-server-json.md),
+  [live API docs](https://registry.modelcontextprotocol.io/docs).
+- Glama: add this repo at
+  [glama.ai/mcp/servers](https://glama.ai/mcp/servers), then Claim
+  ownership as `ManuOtel` to pick up `glama.json`. Background:
+  [what is glama.json](https://glama.ai/blog/2025-07-08-what-is-glamajson).
+- Smithery: publish at [smithery.ai/new](https://smithery.ai/new)
+  from your own public HTTPS `/worker-mcp` URL
+  ([docs](https://smithery.ai/docs/build/publish)). This bridge uses
+  a static Bearer token, not OAuth, so an auth-required endpoint
+  needs manual review during the Smithery scan.
+
+Listing versus hosting: a registry entry lists the open-source
+bridge (repo, docs, install). It never grants access to anyone's
+private deployment. Advertising a hosted instance means publishing
+YOUR own HTTPS URL, owning that domain, and issuing your own
+tokens. There is no permanent public hosted service in this repo.
+
+Endpoint reminder: `/worker-mcp` (five worker tools, no shell) is
+the default for all new clients; `/mcp` (full legacy catalog,
+`exec_run` opt-in) is legacy only. Never publish an endpoint you do
+not operate, and never commit tokens.
 
 ## Community and license
 
