@@ -37,6 +37,32 @@ def test_bridge_and_codex_plugin_share_version() -> None:
     assert manifest["version"] == _bridge_version()
 
 
+def test_registry_metadata_tracks_release_and_uses_placeholder_remote() -> None:
+    """Registry metadata is version-coherent and cannot advertise a live host."""
+    metadata = json.loads((REPO / "server.json").read_text())
+    assert metadata["name"] == "io.github.manuotel/opencode-mcp-bridge"
+    assert metadata["version"] == _bridge_version()
+    assert metadata["repository"]["url"] == "https://github.com/ManuOtel/opencode-mcp-bridge"
+    remotes = metadata["remotes"]
+    assert remotes == [
+        {
+            "type": "streamable-http",
+            "url": "https://example.invalid/worker-mcp",
+            "headers": [
+                {
+                    "name": "Authorization",
+                    "description": "Bearer token for the user's own bridge deployment.",
+                    "isRequired": True,
+                    "isSecret": True,
+                }
+            ],
+        }
+    ]
+    serialized = json.dumps(metadata)
+    assert "opencode-mcp.manuotel.com" not in serialized
+    assert "OPENCODE_MCP_BEARER_TOKEN" not in serialized
+
+
 def test_claude_marketplace_tracks_claude_manifest() -> None:
     """Nested Claude plugin and its marketplace entry publish the same version."""
     manifest = json.loads(
