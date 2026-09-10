@@ -49,7 +49,9 @@ git diff --check
 - `MCP_BEARER_TOKEN` is a root-equivalent secret. Generate with
   `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`, rotate on leak.
 - `exec_run` is an unsandboxed shell where the bridge runs. Prefer session tools for code edits.
-- `/health` is the only unauthenticated endpoint. Everything under `/mcp` needs the Bearer token.
+- `/health` plus read-only GET/HEAD on `/.well-known/oauth-protected-resource` (+ `/mcp`,
+  `/worker-mcp` children) are unauthenticated (RFC 9728, no secrets). Everything under `/mcp`
+  needs the Bearer token.
 
 ## Worktrees and git
 
