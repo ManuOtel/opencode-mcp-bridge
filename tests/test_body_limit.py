@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -266,17 +267,26 @@ def test_oversized_never_invokes_downstream() -> None:
     assert body == {"error": "payload too large"}
 
 
+@dataclass
+class StreamedResult:
+    """Local result for driving the middleware with fragmented chunks."""
+
+    called: bool
+    status: int | None
+    body: dict | None
+    joined: bytes
+    messages: list[dict] = field(default_factory=list)
+    receive_calls: int = 0
+
+
 def _run_streamed(
     max_bytes: int,
     chunks: list[bytes],
     *,
     path: str = "/mcp",
     content_length: bytes | None = None,
-) -> tuple[bool, int | None, dict | None, bytes, list[dict]]:
-    """Drive middleware with fragmented http.request chunks.
-
-    Returns (downstream_called, status, parsed_413_body, seen_body, seen_msgs).
-    """
+) -> StreamedResult:
+    """Drive middleware with fragmented http.request chunks."""
     calls: list[bool] = []
     statuses: list[int] = []
     bodies: list[dict | None] = []
@@ -293,7 +303,7 @@ def _run_streamed(
         )
     if not queue:
         queue.append({"type": "http.request", "body": b"", "more_body": False})
-    receive_calls = [0]
+    receive_calls = 0
 
     async def downstream(scope: dict, receive: object, send: object) -> None:
         calls.append(True)
@@ -305,7 +315,8 @@ def _run_streamed(
                 break
 
     async def _receive() -> dict:
-        receive_calls[0] += 1
+        nonlocal receive_calls
+        receive_calls += 1
         if queue:
             return queue.pop(0)
         return {"type": "http.request", "body": b"", "more_body": False}
@@ -332,36 +343,38 @@ def _run_streamed(
     middleware = RequestBodyLimitMiddleware(_noop, max_bytes)
     middleware.app = downstream  # type: ignore[method-assign]
     asyncio.run(middleware(scope, _receive, _send))
-    joined = b"".join(seen)
-    result_body = bodies[0] if bodies else None
-    result_status = statuses[0] if statuses else None
-    # Attach receive count for bounded checks via function attr hack.
-    _run_streamed.last_receive_calls = receive_calls[0]  # type: ignore[attr-defined]
-    return (bool(calls), result_status, result_body, joined, seen_msgs)
+    return StreamedResult(
+        called=bool(calls),
+        status=statuses[0] if statuses else None,
+        body=bodies[0] if bodies else None,
+        joined=b"".join(seen),
+        messages=seen_msgs,
+        receive_calls=receive_calls,
+    )
 
 
 @pytest.mark.parametrize("path", ["/mcp", "/worker-mcp"])
 def test_fragmented_under_limit_replays_exactly(path: str) -> None:
-    """Fragmented under-limit bodies reach downstream intact on both paths."""
+    """Fragmented under-limit bytes reach downstream intact (coalesced)."""
     chunks = [b"a" * 30, b"b" * 30, b"c" * 40]
-    called, status, body, joined, seen_msgs = _run_streamed(
-        100, chunks, path=path, content_length=None
-    )
-    assert called and status is None and body is None
-    assert joined == b"".join(chunks)
-    assert [m.get("more_body") for m in seen_msgs] == [True, True, False]
-    assert [bytes(m.get("body", b"")) for m in seen_msgs] == chunks
+    result = _run_streamed(100, chunks, path=path, content_length=None)
+    assert result.called and result.status is None and result.body is None
+    assert result.joined == b"".join(chunks)
+    # Bounded design coalesces: one message, identical bytes, no per-chunk list.
+    assert len(result.messages) == 1
+    assert result.messages[0].get("more_body") is False
+    assert bytes(result.messages[0].get("body", b"")) == b"".join(chunks)
 
 
 @pytest.mark.parametrize("path", ["/mcp", "/worker-mcp"])
 def test_fragmented_over_limit_rejects_before_downstream(path: str) -> None:
     """Fragmented over-limit bodies get generic 413 with no downstream call."""
     chunks = [b"x" * 40, b"y" * 40, b"z" * 40]
-    called, status, body, joined, _ = _run_streamed(100, chunks, path=path, content_length=None)
-    assert not called
-    assert status == 413
-    assert body == {"error": "payload too large"}
-    assert joined == b""
+    result = _run_streamed(100, chunks, path=path, content_length=None)
+    assert not result.called
+    assert result.status == 413
+    assert result.body == {"error": "payload too large"}
+    assert result.joined == b""
 
 
 @pytest.mark.parametrize("path", ["/mcp", "/worker-mcp"])
@@ -369,15 +382,15 @@ def test_fragmented_over_limit_rejects_before_downstream(path: str) -> None:
 def test_absent_malformed_streamed_over_limit_rejects(path: str, header: object) -> None:
     """Absent/malformed lengths no longer bypass: streamed bytes are counted."""
     chunks = [b"q" * 60, b"r" * 60]
-    called, status, body, _, _ = _run_streamed(
+    result = _run_streamed(
         100,
         chunks,
         path=path,
         content_length=header,  # type: ignore[arg-type]
     )
-    assert not called
-    assert status == 413
-    assert body == {"error": "payload too large"}
+    assert not result.called
+    assert result.status == 413
+    assert result.body == {"error": "payload too large"}
 
 
 @pytest.mark.parametrize("path", ["/mcp", "/worker-mcp"])
@@ -385,45 +398,71 @@ def test_absent_malformed_streamed_over_limit_rejects(path: str, header: object)
 def test_absent_malformed_streamed_under_limit_passes(path: str, header: object) -> None:
     """Absent/malformed lengths with small actual bodies still pass through."""
     chunks = [b"ok", b"!"]
-    called, status, body, joined, _ = _run_streamed(
+    result = _run_streamed(
         100,
         chunks,
         path=path,
         content_length=header,  # type: ignore[arg-type]
     )
-    assert called and status is None and body is None
-    assert joined == b"ok!"
+    assert result.called and result.status is None and result.body is None
+    assert result.joined == b"ok!"
 
 
 def test_lying_content_length_streamed_enforced() -> None:
     """A small declared length cannot hide a large streamed body."""
     chunks = [b"a" * 50, b"b" * 60]
-    called, status, body, _, _ = _run_streamed(100, chunks, path="/mcp", content_length=b"10")
-    assert not called
-    assert status == 413
-    assert body == {"error": "payload too large"}
+    result = _run_streamed(100, chunks, path="/mcp", content_length=b"10")
+    assert not result.called
+    assert result.status == 413
+    assert result.body == {"error": "payload too large"}
 
 
 def test_streamed_413_is_generic_and_bounded() -> None:
     """Over-limit 413 echoes nothing; buffering stops at the first bad chunk."""
     secret = b"secret-body-canary-xyz" + b"b" * 60
     chunks = [b"a" * 60, secret, b"c" * 200]
-    called, status, body, _, _ = _run_streamed(100, chunks, path="/mcp")
-    assert not called
-    assert status == 413
-    assert body == {"error": "payload too large"}
-    assert "secret-body-canary-xyz" not in str(body)
+    result = _run_streamed(100, chunks, path="/mcp")
+    assert not result.called
+    assert result.status == 413
+    assert result.body == {"error": "payload too large"}
+    assert "secret-body-canary-xyz" not in str(result.body)
     # Limit 100: 60 ok, next chunk pushes over -> reject on 2nd receive.
-    assert _run_streamed.last_receive_calls == 2  # type: ignore[attr-defined]
+    assert result.receive_calls == 2
+
+
+def test_many_empty_chunks_stay_bounded() -> None:
+    """Zero-byte more_body flood cannot grow buffering; bytes stay intact."""
+    flood = [b""] * 20000
+    chunks = [*flood, b"hello"]
+    result = _run_streamed(100, chunks, path="/mcp")
+    assert result.called and result.status is None and result.body is None
+    assert result.joined == b"hello"
+    # Coalesced replay: downstream sees one message, not 20001 buffered dicts.
+    assert len(result.messages) == 1
+    assert result.messages[0].get("more_body") is False
+    assert bytes(result.messages[0].get("body", b"")) == b"hello"
+    assert result.receive_calls == len(chunks)
+
+
+def test_empty_flood_then_over_limit_rejects_early() -> None:
+    """Empty flood followed by over-limit bytes still 413s without trailing read."""
+    flood = [b""] * 5000
+    chunks = [*flood, b"a" * 60, b"b" * 60, b"c" * 200]
+    result = _run_streamed(100, chunks, path="/mcp")
+    assert not result.called
+    assert result.status == 413
+    assert result.body == {"error": "payload too large"}
+    # 5000 empties + 60 ok + 60 over -> stop, trailing 200-byte chunk never read.
+    assert result.receive_calls == 5002
 
 
 def test_streamed_health_exempt_and_non_mcp_passthrough() -> None:
     """Health and non-MCP paths never 413, even with huge streamed bodies."""
     big = [b"x" * 500, b"y" * 500]
     for path in ("/health", "/health/", "/other"):
-        called, status, body, joined, _ = _run_streamed(10, big, path=path, content_length=b"9999")
-        assert called and status is None and body is None, path
-        assert joined == b"".join(big), path
+        result = _run_streamed(10, big, path=path, content_length=b"9999")
+        assert result.called and result.status is None and result.body is None, path
+        assert result.joined == b"".join(big), path
 
 
 def test_streamed_non_http_passthrough() -> None:

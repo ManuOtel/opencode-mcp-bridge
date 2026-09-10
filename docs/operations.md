@@ -276,8 +276,9 @@ Request-body limit: `MCP_MAX_BODY_BYTES` (default 1048576, 1 MiB) applies
 to `/mcp` and `/worker-mcp` on both declared `Content-Length` and
 streamed/chunked/unknown-length bodies. Oversized requests return generic
 413 before any tool runs; absent, malformed, or under-declared lengths are
-still counted with bounded buffering and do not bypass the limit. Auth
-runs first, so missing tokens stay 401. `/health` is exempt.
+still counted with bounded coalesced buffering (one message, identical
+bytes) and do not bypass the limit. Auth runs first, so missing tokens
+stay 401. `/health` is exempt.
 
 Optional browser-origin policy: set `MCP_ALLOWED_ORIGINS` in the
 deployment env file (same `0640` file as the tokens) as comma-separated

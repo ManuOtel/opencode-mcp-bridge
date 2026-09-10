@@ -234,8 +234,8 @@ Session and utility tools:
   declared `Content-Length` and the actual streamed body on `/mcp` and
   `/worker-mcp`. Oversized requests get a generic 413 before any tool runs;
   absent, malformed, or under-declared lengths are still counted as
-  chunked/streamed bytes with bounded buffering. Auth still runs first,
-  so missing tokens stay 401.
+  chunked/streamed bytes with bounded coalesced buffering (one message,
+  identical bytes). Auth still runs first, so missing tokens stay 401.
 - Browser-origin allowlist (optional): `MCP_ALLOWED_ORIGINS` is a
   comma-separated exact-origin list (`scheme://host[:port]`, http/https,
   no path/query/fragment) for `/mcp` and `/worker-mcp`. Unset or blank

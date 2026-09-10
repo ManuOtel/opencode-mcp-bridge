@@ -20,8 +20,8 @@ In scope are faults in this repository in the following areas:
 - Request-body size limit (`MCP_MAX_BODY_BYTES`, default 1 MiB) on `/mcp`
   and `/worker-mcp` with generic 413 before tool handling. Both declared
   `Content-Length` and streamed/chunked/unknown-length bodies are counted
-  with bounded buffering; absent, malformed, or under-declared lengths do
-  not bypass the limit.
+  with bounded coalesced buffering; absent, malformed, or under-declared
+  lengths do not bypass the limit.
 - Optional browser-origin allowlist (`MCP_ALLOWED_ORIGINS`) on `/mcp` and
   `/worker-mcp`: exact origins only, no `Origin` means CLI/SDK passthrough,
   `Referer`-only derives and checks its origin, malformed `Referer` fails
