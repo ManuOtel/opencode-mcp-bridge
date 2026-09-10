@@ -100,14 +100,24 @@ origin stays bound to loopback; TLS terminates upstream.
 ## 3. Pre/post-deploy checks
 
 Run unauthenticated checks first, then authenticated Streamable HTTP
-checks. `scripts/smoke.sh` automates the same sequence:
+checks. `scripts/smoke.sh` checks the deployed worker endpoint only
+(`GET /health` without a token, unauthenticated `POST` is `401`,
+authenticated `tools/list` returns exactly the five `worker_*` tools
+with no `exec_run`):
 
 ```bash
-BASE="http://127.0.0.1:8087" MCP_BEARER_TOKEN="<paste-token-here>" ./scripts/smoke.sh
+export MCP_URL="https://<your-domain>/worker-mcp"
+export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+./scripts/smoke.sh
 ```
 
-Against your edge, set `BASE="https://<your-domain>"` with the same
-token variable. Manual equivalents:
+Locally, set `MCP_URL="http://127.0.0.1:8087/worker-mcp"` with the same
+token variable. The script takes no arguments, never prints the token
+or `Authorization` header, and prints counts plus tool names instead
+of full responses. It verifies transport behavior only and does not
+prove client compatibility; register a real client per
+`docs/client-setup.md` to confirm end-to-end use. Manual equivalents
+for both endpoints:
 
 ```bash
 curl -fsS "$BASE/health"
