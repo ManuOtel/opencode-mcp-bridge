@@ -17,6 +17,8 @@ In scope are faults in this repository in the following areas:
 
 - Bearer-token authentication on `/mcp` and `/worker-mcp`.
 - Token rotation with `MCP_BEARER_TOKEN_SECONDARY`.
+- Request-body size limit (`MCP_MAX_BODY_BYTES`, default 1 MiB) on `/mcp`
+  and `/worker-mcp` with generic 413 before tool handling.
 - The `exec_run` opt-in gate (`ENABLE_EXEC_RUN`).
 - Tool access boundaries between `/mcp` and `/worker-mcp`.
 - Unsafe handling of paths, commands, or logs by the bridge code.

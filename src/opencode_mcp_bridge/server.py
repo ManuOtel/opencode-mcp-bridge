@@ -2102,6 +2102,74 @@ def _truncate(text: str, cap: int) -> str:
     return text
 
 
+class RequestBodyLimitMiddleware:
+    """ASGI middleware rejecting oversized MCP request bodies early.
+
+    Enforces MCP_MAX_BODY_BYTES on declared Content-Length for /mcp and
+    /worker-mcp before FastMCP/tool handling. Oversized requests get a
+    generic 413 and never reach downstream tools. Requests with an absent
+    or malformed Content-Length pass through (chunked/unknown length is
+    handled downstream). All other paths (including /health) pass through
+    untouched. The 413 body is generic and never echoes tokens or sizes.
+    """
+
+    def __init__(self, app: Any, max_body_bytes: int) -> None:
+        """Create the middleware.
+
+        Args:
+            app: Downstream ASGI app.
+            max_body_bytes: Max declared Content-Length in bytes.
+
+        Raises:
+            RuntimeError: If the limit is not a positive integer.
+        """
+        if not isinstance(max_body_bytes, int) or max_body_bytes <= 0:
+            raise RuntimeError("Body limit misconfigured: must be a positive integer")
+        self.app = app
+        self._max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        """Reject oversized bodies by declared Content-Length.
+
+        Args:
+            scope: ASGI scope.
+            receive: ASGI receive channel.
+            send: ASGI send channel.
+        """
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        normalized = (scope.get("path", "") or "").rstrip("/") or "/"
+        if normalized not in ("/mcp", "/worker-mcp"):
+            await self.app(scope, receive, send)
+            return
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        raw = headers.get(b"content-length")
+        if raw is None:
+            await self.app(scope, receive, send)
+            return
+        try:
+            declared = int(raw.decode().strip())
+        except (ValueError, UnicodeDecodeError, AttributeError):
+            await self.app(scope, receive, send)
+            return
+        if declared < 0:
+            await self.app(scope, receive, send)
+            return
+        if declared > self._max_body_bytes:
+            observability.emit(
+                event=observability.EVENT_AUTH,
+                tool=observability.TOOL_AUTH,
+                outcome=observability.OUTCOME_REJECTED,
+                error_class="PayloadTooLarge",
+                status_code=413,
+            )
+            response = JSONResponse({"error": "payload too large"}, status_code=413)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
 class BearerAuthMiddleware:
     """ASGI middleware requiring a static Bearer token, except health.
 
@@ -2253,7 +2321,8 @@ def create_app() -> Any:
         middleware=merged_middleware,
         lifespan=combined_lifespan,
     )
-    return BearerAuthMiddleware(outer, accepted_bearer_tokens(settings))
+    limited = RequestBodyLimitMiddleware(outer, settings.mcp_max_body_bytes)
+    return BearerAuthMiddleware(limited, accepted_bearer_tokens(settings))
 
 
 def main() -> None:

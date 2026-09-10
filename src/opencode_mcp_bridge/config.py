@@ -47,6 +47,9 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+DEFAULT_MCP_MAX_BODY_BYTES = 1048576
+
+
 @dataclass(frozen=True)
 class Settings:
     """Bridge settings. All secrets come from the environment."""
@@ -66,6 +69,7 @@ class Settings:
     exec_max_output_chars: int
     task_state_path: str
     enable_exec_run: bool
+    mcp_max_body_bytes: int
 
 
 def _normalize_dir(raw: str | None, fallback: str) -> str:
@@ -266,8 +270,11 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         mcp_port = int(os.environ.get("MCP_PORT", "8087"))
         exec_timeout = int(os.environ.get("EXEC_TIMEOUT_S", "120"))
         exec_max_chars = int(os.environ.get("EXEC_MAX_OUTPUT_CHARS", "20000"))
+        max_body_bytes = int(os.environ.get("MCP_MAX_BODY_BYTES", str(DEFAULT_MCP_MAX_BODY_BYTES)))
     except ValueError as exc:
         raise RuntimeError(f"Invalid numeric setting: {exc}") from exc
+    if max_body_bytes <= 0:
+        raise RuntimeError("Invalid MCP_MAX_BODY_BYTES: must be a positive integer")
     normalized_default = _normalize_dir(
         os.environ.get("DEFAULT_DIRECTORY"), os.path.expanduser("~")
     )
@@ -292,4 +299,5 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
             "TASK_STATE_PATH", "/var/lib/opencode-mcp-bridge/tasks.json"
         ),
         enable_exec_run=_as_bool(os.environ.get("ENABLE_EXEC_RUN"), default=False),
+        mcp_max_body_bytes=max_body_bytes,
     )
