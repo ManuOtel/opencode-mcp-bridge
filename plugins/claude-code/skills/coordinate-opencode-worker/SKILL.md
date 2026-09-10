@@ -22,6 +22,9 @@ instead of retrying blindly.
   Never use a paid model unless the boss explicitly asked for it for this task.
 - If unsure which model is free and connected, call `worker_catalog` first
   (defaults already filter to free + connected).
+- Ordered fallback: free first, then paid `opencode-go/muse-spark-1.3-contributor`
+  ("Muse Spark 1.3 Contributor") from `recommendations[1]`. Use paid only when
+  the free model is unavailable and the boss explicitly approved paid.
 
 ## 2. Launch in isolation
 

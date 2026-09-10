@@ -372,6 +372,9 @@ WORKER_OUTPUT_DEFAULT_CHARS = 12000
 WORKER_OUTPUT_MAX_CHARS = 50000
 WORKER_CATALOG_DEFAULT_LIMIT = 20
 WORKER_CATALOG_MAX_LIMIT = 100
+FALLBACK_PAID_PROVIDER_ID = "opencode-go"
+FALLBACK_PAID_MODEL_ID = "muse-spark-1.3-contributor"
+FALLBACK_PAID_NAME = "Muse Spark 1.3 Contributor"
 WORKER_VERIFY_DEFAULT_CHARS = 12000
 WORKER_VERIFY_GIT_MAX_CHARS = 8000
 WORKER_VERIFY_GIT_MAX_FILES = 50
@@ -1517,6 +1520,113 @@ async def worker_status(
         raise
 
 
+def _find_catalog_model_name(data: dict[str, Any], provider_id: str, model_id: str) -> str | None:
+    """Return the catalog display name for a provider/model pair, if listed.
+
+    Args:
+        data: Raw providers payload with an "all" list.
+        provider_id: Provider to match.
+        model_id: Model to match.
+
+    Returns:
+        Catalog name when the pair is listed, else None.
+    """
+    for provider in data.get("all", []) or []:
+        if not isinstance(provider, dict):
+            continue
+        if provider.get("id") != provider_id:
+            continue
+        entries = provider.get("models", {}) or {}
+        if not isinstance(entries, dict):
+            continue
+        for model_key, spec in entries.items():
+            detail = spec if isinstance(spec, dict) else {}
+            candidate = detail.get("id") or model_key
+            if candidate == model_id:
+                name = detail.get("name")
+                return name if isinstance(name, str) else None
+    return None
+
+
+def _is_model_listed(data: dict[str, Any], provider_id: str, model_id: str) -> bool:
+    """Check whether a provider/model pair is listed in the catalog payload.
+
+    Args:
+        data: Raw providers payload with an "all" list.
+        provider_id: Provider to match.
+        model_id: Model to match.
+
+    Returns:
+        True when the pair is listed, regardless of its display name.
+    """
+    for provider in data.get("all", []) or []:
+        if not isinstance(provider, dict):
+            continue
+        if provider.get("id") != provider_id:
+            continue
+        entries = provider.get("models", {}) or {}
+        if not isinstance(entries, dict):
+            continue
+        for model_key, spec in entries.items():
+            detail = spec if isinstance(spec, dict) else {}
+            if (detail.get("id") or model_key) == model_id:
+                return True
+    return False
+
+
+def _build_recommendations(
+    data: dict[str, Any],
+    connected: set[str],
+    default_provider_id: str,
+    default_model_id: str,
+) -> list[dict[str, Any]]:
+    """Build the ordered model recommendations (free first, paid second).
+
+    The list is filter-independent so clients can discover the paid
+    fallback even when `free_only`, `connected_only`, `query`, or `limit`
+    hides it from `models`. It never changes the default: the bridge
+    still auto-selects only the configured free default.
+
+    Args:
+        data: Raw providers payload with "connected" and "all".
+        connected: Connected provider IDs.
+        default_provider_id: Configured default provider.
+        default_model_id: Configured default model.
+
+    Returns:
+        Two entries: rank 1 is the configured default (try first),
+        rank 2 is the paid OpenCode Go fallback (explicit request only).
+    """
+    default_name = _find_catalog_model_name(data, default_provider_id, default_model_id)
+    fallback_found = _find_catalog_model_name(
+        data, FALLBACK_PAID_PROVIDER_ID, FALLBACK_PAID_MODEL_ID
+    )
+    return [
+        {
+            "rank": 1,
+            "providerID": default_provider_id,
+            "modelID": default_model_id,
+            "name": default_name,
+            "free": True,
+            "connected": default_provider_id in connected,
+            "available": _is_model_listed(data, default_provider_id, default_model_id),
+            "requires_explicit_request": False,
+            "reason": "default-free-first",
+        },
+        {
+            "rank": 2,
+            "providerID": FALLBACK_PAID_PROVIDER_ID,
+            "modelID": FALLBACK_PAID_MODEL_ID,
+            "name": fallback_found or FALLBACK_PAID_NAME,
+            "free": False,
+            "connected": FALLBACK_PAID_PROVIDER_ID in connected,
+            "available": _is_model_listed(data, FALLBACK_PAID_PROVIDER_ID, FALLBACK_PAID_MODEL_ID),
+            "requires_explicit_request": True,
+            "reason": "paid-fallback-use-only-when-explicitly-requested",
+        },
+    ]
+
+
 @mcp.tool(
     annotations={
         "readOnlyHint": True,
@@ -1546,6 +1656,9 @@ async def worker_catalog(
     free; cost metadata is preserved in entries but does not infer
     billing entitlement. The configured default provider/model sorts
     first when it survives filters, then provider/model order.
+    `recommendations` is filter-independent and always lists rank 1
+    (configured free default, try first) then rank 2 (paid OpenCode Go
+    `opencode-go/muse-spark-1.3-contributor`, explicit request only).
 
     Args:
         query: Case-insensitive substring filter over provider and model
@@ -1555,7 +1668,8 @@ async def worker_catalog(
         limit: Max entries (1-100).
 
     Returns:
-        Compact dict with model entries, bridge defaults, and total count.
+        Compact dict with model entries, bridge defaults, total count,
+        and ordered recommendations (free first, paid fallback second).
     """
     _obs_start = time.perf_counter()
     observability.emit(
@@ -1627,6 +1741,12 @@ async def worker_catalog(
                 "modelID": client.default_model_id,
             },
             "total": len(models),
+            "recommendations": _build_recommendations(
+                data,
+                connected,
+                client.default_provider_id,
+                client.default_model_id,
+            ),
         }
         observability.emit(
             event=observability.EVENT_WORKER,

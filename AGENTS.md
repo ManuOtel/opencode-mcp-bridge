@@ -25,6 +25,9 @@ These rules bind every worker (human or agent) in this repo. They align with the
 - Default model is `opencode/muse-spark-1.3-contributor-free`. Use `worker_catalog` to confirm
   free + connected models.
 - No paid models, no Copilot, unless the boss explicitly requested them for this task.
+- Ordered fallback: free first, then paid `opencode-go/muse-spark-1.3-contributor`
+  ("Muse Spark 1.3 Contributor") from `worker_catalog.recommendations[1]`.
+  Paid use must be intentional; the bridge never auto-selects paid.
 
 ## Tests and checks (run before reporting done)
 

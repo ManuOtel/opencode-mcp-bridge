@@ -789,3 +789,109 @@ def test_worker_catalog_default_first(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
     assert result["models"][0]["providerID"] == fake.default_provider_id
     assert result["models"][0]["modelID"] == fake.default_model_id
+
+
+def _fallback_payload() -> dict[str, Any]:
+    return {
+        "connected": ["opencode", "opencode-go"],
+        "default": {},
+        "all": [
+            {
+                "id": "opencode",
+                "name": "Opencode",
+                "models": {
+                    "muse-spark-1.3-contributor-free": {
+                        "id": "muse-spark-1.3-contributor-free",
+                        "name": "Muse Spark Free",
+                    },
+                },
+            },
+            {
+                "id": "opencode-go",
+                "name": "OpenCode Go",
+                "models": {
+                    "muse-spark-1.3-contributor": {
+                        "id": "muse-spark-1.3-contributor",
+                        "name": "Muse Spark 1.3 Contributor",
+                    },
+                },
+            },
+        ],
+    }
+
+
+def test_worker_catalog_recommendations_free_first_paid_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recommendations order free default first, paid fallback second."""
+    fake = _patch_client(monkeypatch)
+    fake.providers_raw = _fallback_payload()
+    result = asyncio.run(server.worker_catalog())
+    # Backward-compatible fields stay intact.
+    assert result["default"] == {
+        "providerID": "opencode",
+        "modelID": "muse-spark-1.3-contributor-free",
+    }
+    assert result["total"] == 1
+    recs = result["recommendations"]
+    assert [r["rank"] for r in recs] == [1, 2]
+    assert (recs[0]["providerID"], recs[0]["modelID"]) == (
+        "opencode",
+        "muse-spark-1.3-contributor-free",
+    )
+    assert recs[0]["free"] is True
+    assert recs[0]["requires_explicit_request"] is False
+    assert recs[0]["connected"] is True
+    assert recs[0]["available"] is True
+    assert (recs[1]["providerID"], recs[1]["modelID"]) == (
+        "opencode-go",
+        "muse-spark-1.3-contributor",
+    )
+    assert recs[1]["name"] == "Muse Spark 1.3 Contributor"
+    assert recs[1]["free"] is False
+    assert recs[1]["requires_explicit_request"] is True
+    assert recs[1]["connected"] is True
+    assert recs[1]["available"] is True
+
+
+def test_worker_catalog_recommendations_survive_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Paid fallback stays discoverable when filters hide it from models."""
+    fake = _patch_client(monkeypatch)
+    fake.providers_raw = _fallback_payload()
+
+    async def run() -> tuple[dict[str, Any], dict[str, Any]]:
+        default_view = await server.worker_catalog()
+        queried = await server.worker_catalog(query="zzz-no-match")
+        return default_view, queried
+
+    default_view, queried = asyncio.run(run())
+    assert default_view["total"] == 1
+    assert len(default_view["recommendations"]) == 2
+    assert queried["models"] == []
+    assert queried["total"] == 0
+    assert [r["modelID"] for r in queried["recommendations"]] == [
+        "muse-spark-1.3-contributor-free",
+        "muse-spark-1.3-contributor",
+    ]
+
+
+def test_worker_catalog_recommendations_flag_unavailable_paid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent/disconnected paid fallback is still listed but not available."""
+    fake = _patch_client(monkeypatch)
+    fake.providers_raw = _catalog_payload()
+    result = asyncio.run(server.worker_catalog())
+    recs = result["recommendations"]
+    assert (recs[1]["providerID"], recs[1]["modelID"]) == (
+        "opencode-go",
+        "muse-spark-1.3-contributor",
+    )
+    assert recs[1]["name"] == "Muse Spark 1.3 Contributor"
+    assert recs[1]["connected"] is False
+    assert recs[1]["available"] is False
+    assert recs[1]["requires_explicit_request"] is True
+    # Default still auto-selects free, never paid.
+    assert result["default"]["modelID"] == "muse-spark-1.3-contributor-free"
