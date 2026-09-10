@@ -37,8 +37,8 @@ def test_bridge_and_codex_plugin_share_version() -> None:
     assert manifest["version"] == _bridge_version()
 
 
-def test_registry_metadata_tracks_release_and_uses_placeholder_remote() -> None:
-    """Registry metadata is version-coherent and cannot advertise a live host."""
+def test_registry_metadata_tracks_release_and_advertises_demo_remote() -> None:
+    """Registry metadata is version-coherent and advertises the demo HTTPS endpoint."""
     metadata = json.loads((REPO / "server.json").read_text())
     assert metadata["name"] == "io.github.manuotel/opencode-mcp-bridge"
     assert metadata["version"] == _bridge_version()
@@ -47,7 +47,7 @@ def test_registry_metadata_tracks_release_and_uses_placeholder_remote() -> None:
     assert remotes == [
         {
             "type": "streamable-http",
-            "url": "https://example.invalid/worker-mcp",
+            "url": "https://opencode-mcp.manuotel.com/worker-mcp",
             "headers": [
                 {
                     "name": "Authorization",
@@ -58,8 +58,18 @@ def test_registry_metadata_tracks_release_and_uses_placeholder_remote() -> None:
             ],
         }
     ]
+    url = remotes[0]["url"]
+    assert url.startswith("https://")
+    assert url == "https://opencode-mcp.manuotel.com/worker-mcp"
+    assert url.endswith("/worker-mcp")
+    assert "@" not in url, "remote URL must not embed credentials"
+    header = remotes[0]["headers"][0]
+    assert header["name"] == "Authorization"
+    assert header["isRequired"] is True
+    assert header["isSecret"] is True
     serialized = json.dumps(metadata)
-    assert "opencode-mcp.manuotel.com" not in serialized
+    assert "https://opencode-mcp.manuotel.com/worker-mcp" in serialized
+    assert "example.invalid" not in serialized
     assert "OPENCODE_MCP_BEARER_TOKEN" not in serialized
 
 

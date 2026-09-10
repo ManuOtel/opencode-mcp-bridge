@@ -297,7 +297,20 @@ def test_readme_quick_connect() -> None:
     assert "does not replace opencode" in flat
     assert "no local stdio" in flat or "remote http only" in flat
     assert "may require its own token" in flat or "may require its token" in flat
-    assert MAINTAINER_URL not in text, "README generic path must not point at the maintainer server"
+    # Optional community demo is advertised, with a self-host/demo distinction.
+    assert MAINTAINER_URL in text
+    assert MAINTAINER_URL.startswith("https://")
+    assert MAINTAINER_URL.endswith("/worker-mcp")
+    assert "self-host for production" in flat
+    assert "not for production" in flat
+    assert "operated by manuotel" in flat
+    assert "requires its own token" in flat or "never supplies a token" in flat
+    # Generic quick-connect stays on the user's own bridge, never the demo.
+    assert "your own bridge" in flat
+    assert "opt-in only" in flat
+    assert "never point" in flat
+    quick_idx = text.index("Quick connect")
+    assert MAINTAINER_URL not in text[quick_idx : quick_idx + 600]
     # Opinionated skills/AGENTS.md references stay intact.
     assert "AGENTS.md" in text
     assert "delegate-to-opencode" in text

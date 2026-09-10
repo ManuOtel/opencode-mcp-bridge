@@ -90,6 +90,7 @@ def test_docs_distinguish_codex_marketplace_from_claude_marketplace() -> None:
 def test_readme_points_at_marketplace_flow() -> None:
     """README shows the add command and links the detailed doc section."""
     text = README.read_text()
+    flat = " ".join(text.split()).lower()
     assert ADD_COMMAND in text
     assert PLUGIN_NAME in text
     assert "docs/client-setup.md" in text
@@ -98,4 +99,11 @@ def test_readme_points_at_marketplace_flow() -> None:
     assert "OPENCODE_MCP_URL" in text
     assert "OPENCODE_MCP_BEARER_TOKEN" in text
     assert "delegate-to-opencode" in text
-    assert "https://opencode-mcp.manuotel.com/worker-mcp" not in text
+    # Optional community demo endpoint with a clear self-host/demo distinction.
+    assert "https://opencode-mcp.manuotel.com/worker-mcp" in text
+    assert "/worker-mcp" in text
+    assert "self-host for production" in flat
+    assert "not for production" in flat
+    assert "operated by manuotel" in flat
+    assert "requires its own token" in flat or "never supplies a token" in flat
+    assert "never paste a real token" in flat
