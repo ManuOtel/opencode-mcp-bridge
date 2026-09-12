@@ -91,10 +91,9 @@ uv run ruff format --check src tests
 git diff --check
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same verification on pull requests
-and on pushes to `master`.
-CI tests Python 3.11, 3.12, and 3.13.
-CI also builds the Docker image (`Dockerfile`) without pushing it.
+CI (`.github/workflows/ci.yml`) runs pull requests on Python 3.14 only,
+and pushes to `master` on Python 3.11, 3.12, 3.13, and 3.14.
+Docker image builds (`Dockerfile`, no push) run only on pushes to `master`.
 CI also verifies JSON manifests with `python3 -m json.tool` for these files:
 
 - `.codex-plugin/plugin.json`

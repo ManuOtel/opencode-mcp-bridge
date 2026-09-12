@@ -557,10 +557,10 @@ uv run ruff format --check src tests
 git diff --check
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same checks on pull requests
-and pushes to master across Python 3.11, 3.12, and 3.13, plus JSON
+CI (`.github/workflows/ci.yml`) runs pull requests on Python 3.14 only,
+and pushes to master across Python 3.11, 3.12, 3.13, and 3.14, plus JSON
 validation of the Codex and Claude plugin manifests and a no-push
-Docker build. `ruff format` in write mode touches Python files: use
+Docker build on master pushes only. `ruff format` in write mode touches Python files: use
 `--check` only and report failures instead of fixing them here.
 
 ## Publish and discover
