@@ -9,9 +9,9 @@ Use when `worker_status` returns `error` or `unknown`, output stalls, or the dir
 
 ## Diagnose first
 
-- `unknown` usually means wrong `directory` or a gone session. Re-poll with the exact `directory` returned by `worker_run`.
+- `unknown` usually means wrong `directory` or a gone session. Re-check once with `worker_status` using the exact `directory` returned by `worker_run`.
 - `error` means the latest assistant message carries a provider error. Read `output` before retrying; the fix may be the prompt, not the infra.
-- Stuck (`running` with no output growth over several polls): re-check with `include_output=false` to confirm state cheaply, then decide.
+- Stuck (`running` with no output growth): prefer one bounded `worker_wait` (default 30s, clamped 1-120) to wait for a change server-side instead of client sleep loops. Re-check with `worker_status` plus `include_output=false` to confirm state cheaply, then decide. `worker_verify` stays the evidence gate before accepting recovered work.
 
 ## Act safely
 

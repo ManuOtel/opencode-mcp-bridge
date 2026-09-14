@@ -134,7 +134,7 @@ def test_worker_cleanup_abort_and_delete(monkeypatch: pytest.MonkeyPatch) -> Non
         return abort, delete
 
     abort, delete = asyncio.run(run())
-    assert abort == {
+    for key, expected in {
         "taskID": "ses_1",
         "sessionID": "ses_1",
         "action": "abort",
@@ -142,7 +142,14 @@ def test_worker_cleanup_abort_and_delete(monkeypatch: pytest.MonkeyPatch) -> Non
         "deleted": False,
         "directory": "/tmp/w",
         "cleanup_warning": None,
-    }
+    }.items():
+        assert abort[key] == expected
+    # Stable contract is additive: legacy keys above plus wait-friendly fields.
+    assert abort["timed_out"] is False
+    assert abort["retryable"] is False
+    assert abort["next_action"] == "worker_status"
+    assert abort["error_code"] is None
+    assert abort["evidence"]["status"] == "aborted"
     assert delete["action"] == "delete"
     assert delete["aborted"] is True
     assert delete["deleted"] is True
@@ -384,6 +391,7 @@ EXPECTED_ANNOTATIONS: dict[str, dict[str, bool]] = {
     "get_diff": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
     "worker_run": {"readOnly": False, "destructive": False, "idempotent": False, "open": True},
     "worker_status": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
+    "worker_wait": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
     "worker_catalog": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
     "exec_run": {"readOnly": False, "destructive": True, "idempotent": False, "open": True},
     "worker_verify": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
@@ -412,6 +420,7 @@ def test_instructions_worker_first_and_bounded() -> None:
     for tool in (
         "worker_catalog",
         "worker_run",
+        "worker_wait",
         "worker_status",
         "worker_verify",
         "worker_cleanup",
@@ -421,7 +430,7 @@ def test_instructions_worker_first_and_bounded() -> None:
 
 
 def test_dual_servers_list_expected_names() -> None:
-    """Full server keeps all 16 tools; worker server exposes five only."""
+    """Full server keeps all 17 tools; worker server exposes six only."""
     full_names = {t.name for t in asyncio.run(server.mcp.list_tools())}
     assert full_names == set(server.ALL_TOOL_NAMES)
     assert set(server.WORKER_TOOL_NAMES) <= full_names

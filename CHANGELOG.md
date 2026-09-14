@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-14
+
+### Added
+
+- New `worker_wait` tool (requires v0.3.0 code): bounded server-side
+  long-poll for one task. Returns on state or message change, or at the
+  finite `timeout_s` deadline (default 30, clamped 1-120) with
+  `timed_out=true` and `next_action="worker_wait"`. Read-only with
+  `include_output=false` state-only waits; no client sleep loops.
+  Served on `/worker-mcp` (now six worker tools) and `/mcp` (now
+  17 tools); auto-approved alongside `worker_status`, `worker_catalog`,
+  and `worker_verify` in `.mcp.json`.
+- Stable additive task contracts: `worker_run`, `worker_wait`,
+  `worker_status`, `worker_verify`, `worker_cleanup`, and
+  `worker_catalog` keep every existing key and add `state`, `timed_out`,
+  `retryable`, `next_action`, `error_code` (for example `task_not_found`
+  for a missing task, else `null`), and a concise `evidence` object.
+  Existing clients keep working. Truthful `output_schema` on every
+  worker tool, including the full status field set on `worker_verify`.
+- Deterministic MCP conformance smoke tests
+  (`tests/test_mcp_conformance.py`): handshake negotiation, exact
+  6/17 tool surfaces, truthful wire schemas and annotations,
+  free-first catalog recommendations, dedup, error/scope behavior,
+  and bounded output. Focused `worker_wait` tests
+  (`tests/test_worker_wait.py`) prove bounded waits, read-only
+  behavior, and backward-compatible status contracts.
+- Harness and adoption documentation: coordinator-ergonomics README
+  section, `worker_wait`-first workflow in `docs/tool-api.md`, skills
+  (`delegate-to-opencode`, `recover-opencode-task`,
+  `coordinate-opencode-worker`) preferring bounded `worker_wait` with
+  `worker_status` snapshots and the `worker_verify` evidence gate, and
+  a six-tool `scripts/smoke.sh`.
+- Published plugin versions: Codex `opencode-worker` 0.3.0
+  (`.codex-plugin/plugin.json`, marketplace ref `v0.3.0`) and Claude
+  `opencode-worker` 0.3.0
+  (`plugins/claude-code/.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json`). Bridge and registry metadata
+  (`pyproject.toml`, `server.json`) track 0.3.0.
+
 ## [0.2.0] - 2026-09-04
 
 ### Added
