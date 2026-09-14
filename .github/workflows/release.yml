@@ -11,6 +11,9 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # Same bound as ci.yml: full suite runs in ~15s locally, so 20 min
+    # caps a hung release job at 1/18th of the 360 min default.
+    timeout-minutes: 20
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

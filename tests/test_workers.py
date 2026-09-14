@@ -483,6 +483,23 @@ def test_worker_status_absent_assistant_stays_unknown(
     assert result["messageID"] is None
 
 
+def test_worker_status_rejects_empty_task_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Empty task IDs fail before any backend read, like wait/verify/cleanup."""
+    fake = _patch_client(monkeypatch)
+    status_calls: list[Any] = []
+    orig_status = fake.get_session_status
+
+    async def _counting_status(directory: Any = None) -> dict[str, Any]:
+        status_calls.append(directory)
+        return await orig_status(directory)
+
+    monkeypatch.setattr(fake, "get_session_status", _counting_status)
+    with pytest.raises(ValueError, match="taskID must not be empty"):
+        asyncio.run(server.worker_status("   "))
+    assert status_calls == []
+    assert fake.latest_caps == []
+
+
 @pytest.mark.parametrize("missing_status", [404, 500])
 def test_worker_status_missing_session_maps_to_unknown(
     monkeypatch: pytest.MonkeyPatch, missing_status: int
