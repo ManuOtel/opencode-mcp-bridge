@@ -340,11 +340,14 @@ non-root `opencode-mcp` user), container-scoped shell under Docker (as
 the non-root bridge user). Enable it only where a shell is intended;
 prefer session and worker tools for code edits.
 
-`/worker-mcp` never exposes `exec_run`. It serves exactly the five
-worker tools (`worker_catalog`, `worker_run`, `worker_status`,
-`worker_verify`, `worker_cleanup`), so a leaked worker token cannot
-become a direct shell through this endpoint. Use `/worker-mcp` for
-worker clients; reserve `/mcp` for legacy full-catalog use.
+`/worker-mcp` never exposes `exec_run`. It serves exactly the eight
+worker tools (`worker_catalog`, `worker_run`, `worker_wait`,
+`worker_status`, `worker_verify`, `worker_cleanup`, `worker_decide`,
+`worker_resume`) (six on v0.3.0 bridges without approval tools; five
+on older v0.2.x bridges without `worker_wait`), so a leaked worker
+token cannot become a direct shell through this endpoint. Use
+`/worker-mcp` for worker clients; reserve `/mcp` for legacy
+full-catalog use.
 
 Both endpoints share the same Bearer token and rotation procedure.
 `/health` stays open for reverse-proxy checks.
