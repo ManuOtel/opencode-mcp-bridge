@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import stat
 import sys
 import time
 from pathlib import Path
@@ -518,3 +520,186 @@ def test_new_tools_have_explicit_schemas_and_annotations() -> None:
     worker_names = {t.name for t in worker_tools}
     assert {"worker_decide", "worker_resume"} <= worker_names
     assert "exec_run" not in worker_names
+
+
+def test_symlink_and_dotdot_spellings_resume_same_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Symlink and a/../b spellings fingerprint the canonical directory."""
+    fake = _patch(monkeypatch)
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    os.symlink(real, link)
+    created = asyncio.run(
+        server.worker_run("link work", directory=str(link), requires_approval=True)
+    )
+    assert created["directory"] == os.path.realpath(link)
+    _approve(created["taskID"], created["approval_token"], "approve")
+    resumed = _resume(created["taskID"], created["approval_token"], "link work")
+    assert resumed["state"] == "resumed"
+    assert resumed["directory"] == os.path.realpath(real)
+    assert len(fake.created) == 1
+
+    dotted = os.path.join(str(tmp_path), "a", "..", real.name)
+    created2 = asyncio.run(
+        server.worker_run("dotdot work", directory=dotted, requires_approval=True)
+    )
+    assert created2["directory"] == os.path.realpath(dotted)
+    _approve(created2["taskID"], created2["approval_token"], "approve")
+    resumed2 = asyncio.run(
+        server.worker_resume(
+            taskID=created2["taskID"],
+            approval_token=created2["approval_token"],
+            message="dotdot work",
+            directory=str(real),
+        )
+    )
+    assert resumed2["state"] == "resumed"
+    assert resumed2["directory"] == os.path.realpath(real)
+    assert len(fake.created) == 2
+
+
+def test_over_cap_title_and_agent_approve_then_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Over-cap titles/agents hash like the bounded stored values."""
+    fake = _patch(monkeypatch)
+    big_title = "t" * (server.TASK_TITLE_MAX_CHARS + 300)
+    big_agent = "a" * (server.TASK_AGENT_MAX_CHARS + 50)
+    created = asyncio.run(
+        server.worker_run(
+            "big meta",
+            directory="/tmp/w",
+            title=big_title,
+            agent=big_agent,
+            requestID="req-big-meta",
+            requires_approval=True,
+        )
+    )
+    stored = server._load_task_state()[created["taskID"]]
+    assert stored["title"] == big_title[: server.TASK_TITLE_MAX_CHARS]
+    assert stored["agent"] == big_agent[: server.TASK_AGENT_MAX_CHARS]
+    second = asyncio.run(
+        server.worker_run(
+            "big meta",
+            directory="/tmp/w",
+            title=big_title,
+            agent=big_agent,
+            requestID="req-big-meta",
+            requires_approval=True,
+        )
+    )
+    assert second["deduplicated"] is True
+    assert second["taskID"] == created["taskID"]
+    _approve(created["taskID"], created["approval_token"], "approve")
+    resumed = _resume(created["taskID"], created["approval_token"], "big meta")
+    assert resumed["state"] == "resumed"
+    assert resumed["title"] == big_title[: server.TASK_TITLE_MAX_CHARS]
+    assert resumed["agent"] == big_agent[: server.TASK_AGENT_MAX_CHARS]
+    assert len(fake.created) == 1
+    assert len(fake.prompted) == 1
+
+
+def test_empty_worker_run_message_rejected_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty worker_run messages fail like worker_resume, with no session."""
+    fake = _patch(monkeypatch)
+    for blank in ("", "   "):
+        with pytest.raises(ValueError, match="message must not be empty"):
+            asyncio.run(server.worker_run(blank, directory="/tmp/w"))
+        with pytest.raises(ValueError, match="message must not be empty"):
+            asyncio.run(server.worker_run(blank, directory="/tmp/w", requires_approval=True))
+    assert fake.created == []
+    assert fake.prompted == []
+
+
+def test_wait_on_resumed_long_polls_live_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """worker_wait on a resumed task polls until the bounded deadline."""
+    fake = _patch(monkeypatch)
+    created = asyncio.run(server.worker_run("live", directory="/tmp/w", requires_approval=True))
+    _approve(created["taskID"], created["approval_token"], "approve")
+    resumed = _resume(created["taskID"], created["approval_token"], "live")
+    fake.status_map = {resumed["sessionID"]: {"type": "busy"}}
+    fake.latest = {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
+    fake.status_calls.clear()
+    start = time.monotonic()
+    waited = asyncio.run(server.worker_wait(created["taskID"], timeout_s=1))
+    elapsed = time.monotonic() - start
+    assert waited["taskID"] == created["taskID"]
+    assert waited["sessionID"] == resumed["sessionID"]
+    assert waited["state"] == "running"
+    assert waited["approval_state"] == "resumed"
+    assert waited["timed_out"] is True
+    assert waited["changed"] is False
+    assert waited["timeout_s"] == 1
+    assert elapsed >= 0.9
+    assert len(fake.status_calls) >= 2
+
+
+def test_wait_on_resumed_returns_on_live_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """worker_wait on a resumed task returns early when output progresses."""
+    fake = _patch(monkeypatch)
+    created = asyncio.run(server.worker_run("live", directory="/tmp/w", requires_approval=True))
+    _approve(created["taskID"], created["approval_token"], "approve")
+    resumed = _resume(created["taskID"], created["approval_token"], "live")
+    fake.status_map = {resumed["sessionID"]: {"type": "busy"}}
+    calls = {"n": 0}
+
+    async def _changing_latest(
+        session_id: str, directory: Any = None, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls["n"] += 1
+        if calls["n"] < 2:
+            return {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
+        return {"messageID": "m1", "text": "done", "total_chars": 4, "has_error": False}
+
+    monkeypatch.setattr(fake, "get_latest_assistant", _changing_latest)
+    start = time.monotonic()
+    waited = asyncio.run(server.worker_wait(created["taskID"], timeout_s=5))
+    elapsed = time.monotonic() - start
+    assert waited["taskID"] == created["taskID"]
+    assert waited["approval_state"] == "resumed"
+    assert waited["changed"] is True
+    assert waited["timed_out"] is False
+    assert waited["messageID"] == "m1"
+    assert elapsed < 5
+
+
+def test_cleanup_delete_on_expired_pending_reports_expired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Delete on an expired pending approval reports state expired."""
+    fake = _patch(monkeypatch)
+    created = asyncio.run(server.worker_run("slow", directory="/tmp/w", requires_approval=True))
+    tasks = server._load_task_state()
+    tasks[created["taskID"]]["expires_at"] = time.time() - 1.0
+    server._save_task_state(tasks)
+    result = asyncio.run(server.worker_cleanup(created["taskID"], "/tmp/w", action="delete"))
+    assert result["state"] == "expired"
+    assert result["deleted"] is True
+    assert result["aborted"] is False
+    assert result["sessionID"] is None
+    assert result["evidence"]["status"] == "expired"
+    assert fake.aborted == []
+    assert fake.deleted == []
+    with pytest.raises(ValueError, match="unknown"):
+        _approve(created["taskID"], created["approval_token"], "approve")
+
+
+def test_registry_file_stays_owner_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Registry creation and replacement keep owner-only permissions."""
+    path = tmp_path / "tasks.json"
+    monkeypatch.setenv("TASK_STATE_PATH", str(path))
+    monkeypatch.setattr(server, "_settings", None)
+    _patch(monkeypatch)
+    asyncio.run(server.worker_run("perm check", directory="/tmp/w", requires_approval=True))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    os.chmod(path, 0o644)
+    asyncio.run(server.worker_run("perm check again", directory="/tmp/w"))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

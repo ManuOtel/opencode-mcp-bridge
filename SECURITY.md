@@ -30,6 +30,13 @@ In scope are faults in this repository in the following areas:
 - The `exec_run` opt-in gate (`ENABLE_EXEC_RUN`).
 - Tool access boundaries between `/mcp` and `/worker-mcp`.
 - Unsafe handling of paths, commands, or logs by the bridge code.
+- Task registry (`TASK_STATE_PATH`) file permissions and the persisted
+  `approval_token`: the token is bearer-equivalent (anyone who can read
+  the registry file can approve and resume the paused task), so the file
+  must stay owner-only (`0600`, bridge account only). The bridge creates
+  and replaces it owner-only (O_EXCL temp file plus atomic replace), but
+  operators must not loosen the mode, move it to shared storage, or back
+  it up where others can read it.
 
 Not in scope are the following items:
 

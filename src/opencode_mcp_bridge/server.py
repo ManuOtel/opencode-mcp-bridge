@@ -1,7 +1,7 @@
 """FastMCP server bridging MCP clients to local opencode.
 
-Transport: Streamable HTTP at POST /mcp (full 17-tool catalog, stateless)
-and POST /worker-mcp (six worker_* tools only, stateless). Works with
+Transport: Streamable HTTP at POST /mcp (full 19-tool catalog, stateless)
+and POST /worker-mcp (eight worker_* tools only, stateless). Works with
 ChatGPT, Claude Code, Codex, and other MCP-compatible harnesses.
 Auth: static Bearer token on every /mcp and /worker-mcp request, with an
 optional secondary rotation token for overlap (see README rotation steps);
@@ -1334,12 +1334,17 @@ def _fingerprint_task(
     """Hash task inputs to detect conflicting requestID reuse.
 
     The message text is hashed, never stored, so retries store no prompt.
+    Title and agent are bounded with the same caps used for stored
+    records, so an over-cap value hashes exactly like the value the
+    registry keeps and resume matching cannot drift from storage.
+    Pass the authorized canonical directory (not the raw spelling) so
+    symlink and dot-segment spellings of one directory hash identically.
 
     Args:
         message: Task prompt text.
-        directory: Requested directory (None means server default).
-        title: Optional session title.
-        agent: Optional agent override.
+        directory: Authorized canonical directory (None means server default).
+        title: Optional session title (bounded to TASK_TITLE_MAX_CHARS).
+        agent: Optional agent override (bounded to TASK_AGENT_MAX_CHARS).
         provider_id: Resolved provider ID.
         model_id: Resolved model ID.
         requires_approval: Whether the task pauses for approval.
@@ -1348,12 +1353,14 @@ def _fingerprint_task(
     Returns:
         Hex SHA256 fingerprint of the canonical inputs.
     """
+    title_key = _bound_text(title or "", TASK_TITLE_MAX_CHARS) if title else ""
+    agent_key = _bound_text(agent or "", TASK_AGENT_MAX_CHARS) if agent else ""
     canonical = json.dumps(
         {
             "message": message,
             "directory": _canonical_task_dir(directory),
-            "title": title or "",
-            "agent": agent or "",
+            "title": title_key,
+            "agent": agent_key,
             "providerID": provider_id,
             "modelID": model_id,
             "requires_approval": bool(requires_approval),
@@ -1679,7 +1686,13 @@ def _save_task_state(tasks: dict[str, dict[str, Any]]) -> None:
     same directory, are fsynced, then atomically moved over the registry
     with os.replace. Unique names keep concurrent writers from interleaving
     bytes into one shared temp file; the parent directory is fsynced
-    best-effort so the rename survives a crash.
+    best-effort so the rename survives a crash. The registry file stays
+    owner-only (0600): mkstemp creates the temp file 0600, the mode is
+    reasserted explicitly, and os.replace carries the temp inode over the
+    destination, so a pre-existing lax file cannot survive a save. This
+    matters because approval records carry bearer-equivalent
+    approval_token values: keep TASK_STATE_PATH readable only by the
+    bridge account (see SECURITY.md).
 
     Args:
         tasks: Map of taskID to record dicts.
@@ -1700,6 +1713,7 @@ def _save_task_state(tasks: dict[str, dict[str, Any]]) -> None:
     except OSError as exc:
         raise RuntimeError(f"task registry at {path} is unwritable: {exc.strerror or 'I/O error'}")
     try:
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as handle:
             handle.write(payload)
             handle.flush()
@@ -2013,6 +2027,8 @@ async def worker_run(
         request_id=_obs_request,
     )
     try:
+        if not message or not message.strip():
+            raise ValueError("message must not be empty")
         normalized_request = _normalize_request_id(requestID)
         normalized_risky = _normalize_risky_action(risky_action)
         approval_needed = bool(requires_approval) or normalized_risky is not None
@@ -2021,7 +2037,7 @@ async def worker_run(
         resolved_provider, resolved_model = client.resolve_model(providerID, modelID)
         fingerprint = _fingerprint_task(
             message,
-            directory,
+            authorized_dir,
             title,
             agent,
             resolved_provider,
@@ -2081,6 +2097,8 @@ async def worker_run(
                                         if state_now == APPROVAL_STATE_APPROVED
                                         else "worker_decide"
                                         if state_now == APPROVAL_STATE_REQUIRED
+                                        else "worker_wait"
+                                        if state_now == APPROVAL_STATE_RESUMED
                                         else "worker_run"
                                     ),
                                     "error_code": (
@@ -3067,6 +3085,9 @@ async def worker_wait(
         elapsed_s, timeout_s, retryable, next_action, error_code
         ("task_not_found" when the session is absent), and concise
         evidence. Missing tasks return immediately with state unknown.
+        Pending approvals (required/approved/rejected/expired) also
+        return immediately without polling; resumed approvals long-poll
+        the live resumed session exactly like a running task.
 
     Raises:
         ValueError: If taskID is empty or timeout_s is not finite.
@@ -3107,7 +3128,7 @@ async def worker_wait(
                 and isinstance(resume_session, str)
                 and resume_session
             ):
-                live = await _snapshot_worker(
+                live_first = await _snapshot_worker(
                     resume_session,
                     effective_query,
                     effective_dir,
@@ -3115,31 +3136,110 @@ async def worker_wait(
                     include_output,
                     cap,
                 )
-                merged: dict[str, Any] = {
-                    **live,
+                live_state = live_first["state"]
+                live_message = live_first["messageID"]
+                live_total = live_first["total_chars"]
+                live_error = _error_code_for_snapshot(
+                    live_state, live_first["status"], live_message
+                )
+                if live_state != "running" or live_error is not None or live_first.get("stale"):
+                    merged: dict[str, Any] = {
+                        **live_first,
+                        "taskID": taskID,
+                        "directory": effective_dir,
+                        "approval_state": APPROVAL_STATE_RESUMED,
+                        "risky_action": stale_record.get("risky_action"),
+                        "expires_at": stale_record.get("expires_at"),
+                    }
+                    return {
+                        **merged,
+                        "timed_out": False,
+                        "changed": False,
+                        "elapsed_s": round(time.monotonic() - start, 3),
+                        "timeout_s": bounded_timeout,
+                        "retryable": _retryable_for_state(live_state, False, live_first["stale"]),
+                        "next_action": _next_action_for_state(live_state, False),
+                        "error_code": live_error,
+                        "evidence": _worker_evidence(
+                            live_first["status"],
+                            live_message,
+                            live_first["output_chars"],
+                            live_total,
+                        ),
+                    }
+                deadline = start + bounded_timeout
+                latest = live_first
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(WORKER_WAIT_POLL_S, remaining))
+                    current = await _snapshot_worker(
+                        resume_session,
+                        effective_query,
+                        effective_dir,
+                        None,
+                        include_output,
+                        cap,
+                    )
+                    if (
+                        current["state"] != live_state
+                        or current["messageID"] != live_message
+                        or current["total_chars"] != live_total
+                    ):
+                        merged = {
+                            **current,
+                            "taskID": taskID,
+                            "directory": effective_dir,
+                            "approval_state": APPROVAL_STATE_RESUMED,
+                            "risky_action": stale_record.get("risky_action"),
+                            "expires_at": stale_record.get("expires_at"),
+                        }
+                        return {
+                            **merged,
+                            "timed_out": False,
+                            "changed": True,
+                            "elapsed_s": round(time.monotonic() - start, 3),
+                            "timeout_s": bounded_timeout,
+                            "retryable": _retryable_for_state(
+                                current["state"], False, current["stale"]
+                            ),
+                            "next_action": _next_action_for_state(current["state"], False),
+                            "error_code": _error_code_for_snapshot(
+                                current["state"], current["status"], current["messageID"]
+                            ),
+                            "evidence": _worker_evidence(
+                                current["status"],
+                                current["messageID"],
+                                current["output_chars"],
+                                current["total_chars"],
+                            ),
+                        }
+                    latest = current
+                merged = {
+                    **latest,
                     "taskID": taskID,
                     "directory": effective_dir,
                     "approval_state": APPROVAL_STATE_RESUMED,
                     "risky_action": stale_record.get("risky_action"),
                     "expires_at": stale_record.get("expires_at"),
                 }
-                live_error = _error_code_for_snapshot(
-                    live["state"], live["status"], live["messageID"]
-                )
                 return {
                     **merged,
-                    "timed_out": False,
+                    "timed_out": True,
                     "changed": False,
                     "elapsed_s": round(time.monotonic() - start, 3),
                     "timeout_s": bounded_timeout,
-                    "retryable": _retryable_for_state(live["state"], False, live["stale"]),
-                    "next_action": _next_action_for_state(live["state"], False),
-                    "error_code": live_error,
+                    "retryable": _retryable_for_state(latest["state"], True, latest["stale"]),
+                    "next_action": _next_action_for_state(latest["state"], True),
+                    "error_code": _error_code_for_snapshot(
+                        latest["state"], latest["status"], latest["messageID"]
+                    ),
                     "evidence": _worker_evidence(
-                        live["status"],
-                        live["messageID"],
-                        live["output_chars"],
-                        live["total_chars"],
+                        latest["status"],
+                        latest["messageID"],
+                        latest["output_chars"],
+                        latest["total_chars"],
                     ),
                 }
         first = await _snapshot_worker(
@@ -3813,6 +3913,10 @@ async def worker_cleanup(
                         )
                     ):
                         raise ValueError("approval already started; retry cleanup")
+                    expired = _expire_approval_record(tasks, taskID)
+                    if expired is not None:
+                        _save_task_state(tasks)
+                        current = expired
                     _remove_task_record(taskID)
                     _obs_result = {
                         "taskID": taskID,
@@ -4573,7 +4677,7 @@ def _server_card_version() -> str:
 async def _server_card_payload() -> dict[str, Any]:
     """Build the static Smithery server-card payload from worker tools.
 
-    Lists exactly the six worker_* tools served on /worker-mcp with
+    Lists exactly the eight worker_* tools served on /worker-mcp with
     their live descriptions and JSON input schemas, so the card cannot
     drift from the real catalog. Never includes exec_run, tokens,
     credentials, or OAuth claims: auth is a static Bearer token and

@@ -50,7 +50,9 @@ loop) or take single snapshots with `worker_status` (all versions).
   Same-`requestID` retries return the paused task (`deduplicated=true`
   with the token); conflicting reuse fails before side effects. Default
   runs (no flag, no descriptor) start immediately; no risky production
-  action is enabled by default.
+  action is enabled by default. The `approval_token` is bearer-equivalent:
+  anyone holding it can decide and resume, and it is persisted in
+  `TASK_STATE_PATH`, so keep that file owner-only (`0600`).
 - `worker_decide(taskID, decision, approval_token, directory?)` (this tree):
   decide a paused task without starting any work. `decision` is
   `approve` (or `approved`) versus `reject` (or `rejected`); the token
