@@ -145,15 +145,19 @@ from the same process.
 Compatibility is protocol-level (MCP over Streamable HTTP with a Bearer
 header) unless an end-to-end test is documented in this repo. Client
 config keys differ per product; confirm key names in the linked official
-docs before pasting.
+docs before pasting. The verified matrix, status labels, validation
+boundary, and first-call contract live in
+[docs/compatibility.md](docs/compatibility.md).
 
 | Harness | How to connect | Status |
 | --- | --- | --- |
 | OpenAI Codex CLI | `codex mcp add` with `--bearer-token-env-var` | Protocol-level, syntax from official docs |
 | Claude Code | `claude mcp add --transport http` or `opencode-worker` plugin | Protocol-level, syntax from official docs |
-| ChatGPT Developer Mode | Remote MCP connector, URL mode + Bearer token | Protocol-level; needs an eligible plan and workspace, plus admin approval where required |
+| ChatGPT Developer Mode / custom MCP connectors | Remote MCP connector, URL mode with your `/worker-mcp` URL | Unverified with a static Bearer header; official docs list OAuth, No Authentication, and Mixed Authentication. Needs an eligible plan and workspace, plus admin approval where required |
 | Cursor | Project `.cursor/mcp.json`, `url` + `headers` | Protocol-level |
+| VS Code | `.vscode/mcp.json`, `servers` + `type: http` + `url` + `headers` (`inputs` for secrets) | Protocol-level, key names from official docs |
 | Gemini CLI | `~/.gemini/settings.json`, `httpUrl` + `headers` | Protocol-level |
+| OpenHands | `openhands mcp add --transport http --header` or TOML `shttp_servers` | Unverified; TOML path documents `url` + `api_key`, CLI path takes a Bearer `--header`. See [docs/compatibility.md](docs/compatibility.md) |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json`, `serverUrl` + `headers` | Protocol-level, key names from official docs |
 | Cline | `cline_mcp_settings.json`, `type: streamableHttp` + `url` + `headers` | Protocol-level, key names from official docs |
 | Roo Code | `mcpServers` entry, `url` + `Authorization` header | Protocol-level, client-specific shape |
@@ -292,6 +296,56 @@ https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html):
   }
 }
 ```
+
+### VS Code
+
+Add to `.vscode/mcp.json` (workspace) or the user `mcp.json`.
+VS Code uses `servers` (not `mcpServers`) with `type: http`, and
+`inputs` for secrets instead of hardcoded tokens. Key names per
+https://code.visualstudio.com/docs/agents/reference/mcp-configuration:
+
+```json
+{
+  "servers": {
+    "opencode-bridge": {
+      "type": "http",
+      "url": "https://<your-domain>/worker-mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:opencode-bridge-token}"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "opencode-bridge-token",
+      "description": "Bearer token for your own bridge (MCP_BEARER_TOKEN)",
+      "password": true
+    }
+  ]
+}
+```
+
+Unverified end-to-end; syntax from the official docs. See
+[docs/compatibility.md](docs/compatibility.md) for the status boundary.
+
+### OpenHands
+
+CLI Bearer path (key names per
+https://docs.openhands.dev/openhands/usage/cli/mcp-servers):
+
+```bash
+openhands mcp add opencode-bridge --transport http \
+  --header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN" \
+  "https://<your-domain>/worker-mcp"
+```
+
+The TOML settings path
+(`https://docs.openhands.dev/openhands/usage/settings/mcp-settings`)
+documents `shttp_servers` with `url` plus `api_key`, not a generic
+`Authorization` header. Unverified end-to-end; confirm the auth field
+for your OpenHands build before use. See
+[docs/compatibility.md](docs/compatibility.md).
 
 ### Windsurf
 
