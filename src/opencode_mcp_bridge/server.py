@@ -2804,6 +2804,10 @@ async def _snapshot_worker(
 
     Only read-only OpenCode reads are used (GET /session/status plus the
     latest assistant message). Never creates, prompts, aborts, or deletes.
+    A missing session surfaces as state unknown: when the status map has
+    no entry and the message fetch reports 404 (or the backend 500 for
+    a missing session), the snippet is discarded and an empty assistant
+    view is used. Transport, auth, and active-task failures still raise.
 
     Args:
         taskID: Task ID from worker_run.
@@ -2828,7 +2832,13 @@ async def _snapshot_worker(
     truncated_chars = 0
     truncated = False
     if include_output:
-        latest = await client.get_latest_assistant(taskID, effective_query, max_chars=cap + 1)
+        try:
+            latest = await client.get_latest_assistant(taskID, effective_query, max_chars=cap + 1)
+        except OpencodeError as exc:
+            if raw is None and exc.status in (404, 500):
+                latest = {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
+            else:
+                raise
         message_id = latest.get("messageID")
         if latest.get("has_error"):
             state = "error"
