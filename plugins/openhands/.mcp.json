@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "opencode": {
+      "url": "https://YOUR-BRIDGE-HOST/worker-mcp",
+      "transport": "http",
+      "headers": {
+        "Authorization": "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
+      }
+    }
+  }
+}
