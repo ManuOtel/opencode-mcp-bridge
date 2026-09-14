@@ -58,8 +58,10 @@ export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
 
 Validates both variables, the `http(s)://` scheme, and the
 `/mcp` or `/worker-mcp` suffix without invoking any client CLI and
-without network. Covered by `tests/test_client_onboarding.py` and
-`tests/test_adoption_proof.py`. Never prints the token value.
+without network. It runs clean: no `codex` or `claude` binary needs to
+be installed (proven with an empty `PATH` in
+`tests/test_adoption_proof.py`). Covered by `tests/test_client_onboarding.py`
+and `tests/test_adoption_proof.py`. Never prints the token value.
 
 ## First call against your own bridge (`/worker-mcp` only)
 

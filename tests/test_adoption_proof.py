@@ -183,3 +183,21 @@ def test_helper_dry_run_stays_network_free(tmp_path: Path) -> None:
     combined = proc.stdout + proc.stderr
     assert url in proc.stdout
     assert canary not in combined
+
+
+def test_readme_tool_allowlists_cover_all_worker_tools() -> None:
+    """README Pi/Hermes allowlists and safe pattern name all eight worker tools."""
+    text = README.read_text()
+    for tool in WORKER_TOOLS:
+        assert tool in text, f"README missing worker tool: {tool}"
+    assert "worker_decide" in text
+    assert "worker_resume" in text
+
+
+def test_readme_openhands_example_uses_placeholder_not_expanded_token() -> None:
+    """OpenHands CLI example uses a placeholder, never a shell-expanded token."""
+    text = README.read_text()
+    openhands_idx = text.index("### OpenHands")
+    section = text[openhands_idx : openhands_idx + 1200]
+    assert "<paste-token-here>" in section
+    assert '"Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"' not in section
