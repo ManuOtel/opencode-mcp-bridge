@@ -483,6 +483,81 @@ def test_worker_status_absent_assistant_stays_unknown(
     assert result["messageID"] is None
 
 
+@pytest.mark.parametrize("missing_status", [404, 500])
+def test_worker_status_missing_session_maps_to_unknown(
+    monkeypatch: pytest.MonkeyPatch, missing_status: int
+) -> None:
+    """Backend 404/500 on messages for an absent session stays unknown."""
+
+    class _MissingClient(_FakeWorkerClient):
+        async def get_latest_assistant(
+            self, session_id: str, directory: Any = None, **kwargs: Any
+        ) -> dict[str, Any]:
+            raise OpencodeError(
+                "GET",
+                f"/session/{session_id}/message",
+                missing_status,
+                "backend-missing-snippet-xyz",
+            )
+
+    fake = _MissingClient()
+    fake.status_map = {}
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+    result = asyncio.run(server.worker_status("ses_missing"))
+    assert result["state"] == "unknown"
+    assert result["status"] is None
+    assert result["messageID"] is None
+    assert result["output"] == ""
+    assert result["timed_out"] is False
+    assert result["retryable"] is False
+    assert result["next_action"] == "worker_status"
+    assert result["error_code"] == "task_not_found"
+    assert result["evidence"] == {
+        "status": None,
+        "messageID": None,
+        "output_chars": 0,
+        "total_chars": 0,
+    }
+    serialized = json.dumps(result)
+    assert "backend-missing-snippet-xyz" not in serialized
+
+
+def test_worker_status_active_task_backend_failure_still_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 500 on messages for an active session is genuine and must raise."""
+
+    class _FlakyClient(_FakeWorkerClient):
+        async def get_latest_assistant(
+            self, session_id: str, directory: Any = None, **kwargs: Any
+        ) -> dict[str, Any]:
+            raise OpencodeError("GET", f"/session/{session_id}/message", 500, "boom")
+
+    fake = _FlakyClient()
+    fake.status_map = {"ses_1": {"type": "busy"}}
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+    with pytest.raises(OpencodeError, match="boom"):
+        asyncio.run(server.worker_status("ses_1"))
+
+
+def test_worker_status_missing_session_auth_failure_still_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auth failures never map to unknown, even for absent sessions."""
+
+    class _AuthClient(_FakeWorkerClient):
+        async def get_latest_assistant(
+            self, session_id: str, directory: Any = None, **kwargs: Any
+        ) -> dict[str, Any]:
+            raise OpencodeError("GET", f"/session/{session_id}/message", 401, "denied")
+
+    fake = _AuthClient()
+    fake.status_map = {}
+    monkeypatch.setattr(server, "get_client", lambda: fake)
+    with pytest.raises(OpencodeError, match="denied"):
+        asyncio.run(server.worker_status("ses_missing"))
+
+
 def test_worker_status_absent_with_assistant_error_is_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
