@@ -8,6 +8,8 @@
       "tools": {
         "worker_run": { "approval_mode": "prompt" },
         "worker_cleanup": { "approval_mode": "prompt" },
+        "worker_decide": { "approval_mode": "prompt" },
+        "worker_resume": { "approval_mode": "prompt" },
         "worker_status": { "approval_mode": "approve" },
         "worker_wait": { "approval_mode": "approve" },
         "worker_catalog": { "approval_mode": "approve" },

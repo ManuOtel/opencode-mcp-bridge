@@ -124,7 +124,22 @@ def test_codex_bundle_has_placeholder_not_maintainer_url() -> None:
     config = json.loads(raw)
     server = config["mcpServers"]["opencode"]
     assert server["bearer_token_env_var"] == "OPENCODE_MCP_BEARER_TOKEN"
-    assert "worker_run" in server["tools"]
+    assert server["url"].endswith("/worker-mcp")
+    tools = server["tools"]
+    assert set(tools) == {
+        "worker_run",
+        "worker_status",
+        "worker_wait",
+        "worker_catalog",
+        "worker_verify",
+        "worker_cleanup",
+        "worker_decide",
+        "worker_resume",
+    }
+    for name in ("worker_run", "worker_cleanup", "worker_decide", "worker_resume"):
+        assert tools[name]["approval_mode"] == "prompt", name
+    for name in ("worker_status", "worker_wait", "worker_catalog", "worker_verify"):
+        assert tools[name]["approval_mode"] == "approve", name
 
 
 def test_helper_rejects_bad_mode() -> None:
