@@ -66,7 +66,7 @@ def test_compatibility_doc_exists_and_linked_from_readme() -> None:
 
 
 def test_matrix_lists_all_required_harnesses() -> None:
-    """All eight harness families appear by name."""
+    """All nine named harnesses appear by name (Pi and Hermes share one row)."""
     text = _text()
     for harness in HARNESSES:
         assert harness in text, f"missing harness: {harness}"
