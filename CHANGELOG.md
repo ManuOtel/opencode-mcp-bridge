@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-14
+
+### Fixed
+
+- Version coherence only (no runtime behavior change): `pyproject.toml`,
+  `server.json`, Codex (`.codex-plugin/plugin.json`), Claude
+  (`plugins/claude-code/.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json`), and OpenHands
+  (`plugins/openhands/.plugin/plugin.json`) manifests, the Codex
+  marketplace `ref` (`.agents/plugins/marketplace.json` now `v0.4.3`),
+  and `SERVER_CARD_FALLBACK_VERSION` all track `0.4.3`. Tags `v0.4.1` and
+  `v0.4.2` shipped code fixes without a metadata bump; those tags are
+  unchanged. Docs (`README.md`, `docs/client-setup.md`) and marketplace
+  test pins now reference `v0.4.3`, and `tests/test_release_coherence.py`
+  guards the full version set.
+
 ## [0.4.0] - 2026-09-14
 
 ### Added

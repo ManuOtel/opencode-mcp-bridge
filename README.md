@@ -187,10 +187,10 @@ Codex reads the token from the environment at request time. Codex plugin
 bundles do not interpolate environment variables in the server URL, so
 register the transport per machine with your concrete URL. There is also
 an `opencode-worker` plugin with worker skills, installed from a Git
-marketplace pinned at `v0.4.0`:
+marketplace pinned at `v0.4.3`:
 
 ```bash
-codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.4.0
+codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.4.3
 ```
 
 Then install `opencode-worker` from that marketplace and register your

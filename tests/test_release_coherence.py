@@ -111,3 +111,20 @@ def test_changelog_names_published_plugin_versions() -> None:
     )["version"]
     assert codex in changelog
     assert claude in changelog
+
+
+def test_openhands_manifest_and_fallback_track_bridge() -> None:
+    """OpenHands manifest and server-card fallback publish the bridge version."""
+    manifest = json.loads((REPO / "plugins" / "openhands" / ".plugin" / "plugin.json").read_text())
+    assert SEMVER.match(manifest["version"]), "openhands version must be semver"
+    assert manifest["version"] == _bridge_version()
+    assert SEMVER.match(server.SERVER_CARD_FALLBACK_VERSION)
+    assert server.SERVER_CARD_FALLBACK_VERSION == _bridge_version()
+
+
+def test_codex_marketplace_ref_tracks_bridge_tag() -> None:
+    """Codex marketplace ref pins the v<bridge> release tag."""
+    marketplace = json.loads((REPO / ".agents" / "plugins" / "marketplace.json").read_text())
+    entries = [p for p in marketplace["plugins"] if p["name"] == "opencode-worker"]
+    assert len(entries) == 1
+    assert entries[0]["source"]["ref"] == f"v{_bridge_version()}"
