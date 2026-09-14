@@ -175,6 +175,50 @@ Post-deploy: repeat health, both 401 checks, both `initialize` calls,
 both `tools/list` counts, and one `worker_catalog` call. Any mismatch
 is a failed deploy; roll back per section 5.
 
+## 3b. Live conformance gate (opt-in, one disposable run)
+
+`scripts/smoke.sh` proves transport only.
+`scripts/live_conformance.sh` plus `tests/test_live_conformance.py`
+prove endpoint conformance against a live bridge with one disposable
+free-worker run (run, duplicate `requestID`, status, bounded
+`worker_wait`, verify, cleanup) plus error paths. Normal `pytest`
+stays network-free: the live module skips cleanly unless the endpoint
+and token env vars are set. The gate never prints bearer tokens.
+
+Local endpoint first:
+
+```bash
+export OPENCODE_MCP_LIVE_WORKER_URL="http://127.0.0.1:8087/worker-mcp"
+export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+./scripts/live_conformance.sh
+```
+
+Deployed endpoint (same gate, explicit URL only):
+
+```bash
+export OPENCODE_MCP_LIVE_WORKER_URL="https://<your-domain>/worker-mcp"
+export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+./scripts/live_conformance.sh
+```
+
+Optional env: `OPENCODE_MCP_LIVE_FULL_URL` (default: sibling `/mcp`
+derived from the worker URL), `OPENCODE_MCP_LIVE_DIRECTORY`
+(server-side directory for the disposable run; default: bridge
+default), `OPENCODE_MCP_LIVE_WAIT_S` (wait timeout, default 10).
+Direct pytest without the gate:
+
+```bash
+export OPENCODE_MCP_LIVE_WORKER_URL="http://127.0.0.1:8087/worker-mcp"
+export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+uv run pytest tests/test_live_conformance.py -v
+```
+
+The gate reports `endpoint`, `revision` (`git rev-parse --short
+HEAD`), worker `tool_count` (expect 6, no `exec_run`),
+`full_tool_count` (wider catalog with `exec_run`, worker/full stay
+separate), `test_result` (`PASS`/`FAIL`), and `test_time_s`. Any
+`FAIL` is a failed gate; roll back per section 5.
+
 ## 4. Safe bearer rotation (primary plus secondary)
 
 `MCP_BEARER_TOKEN` is root-equivalent. `MCP_BEARER_TOKEN_SECONDARY`
