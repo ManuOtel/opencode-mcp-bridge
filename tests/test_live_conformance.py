@@ -33,7 +33,7 @@ Optional env:
                                (default 10, clamped 1-30).
 
 Coverage per run: initialize handshake, tools/list on the worker
-endpoint (exactly six tools, no exec_run) and separately on the full
+endpoint (exactly eight tools, no exec_run) and separately on the full
 endpoint (separation check), worker_catalog model discovery
 (free-first), one disposable free-worker run with duplicate requestID
 behavior, worker_status snapshot, bounded worker_wait, worker_verify
@@ -61,6 +61,8 @@ except ImportError:  # pragma: no cover - httpx is a runtime dependency
 EXPECTED_WORKER_TOOLS = [
     "worker_catalog",
     "worker_cleanup",
+    "worker_decide",
+    "worker_resume",
     "worker_run",
     "worker_status",
     "worker_verify",
@@ -256,7 +258,7 @@ def test_live_initialize_handshake(live: dict[str, Any]) -> None:
 
 
 def test_live_worker_tools_list_exact(live: dict[str, Any]) -> None:
-    """Worker endpoint lists exactly the six worker tools, never exec_run."""
+    """Worker endpoint lists exactly the eight worker tools, never exec_run."""
     payload = _rpc(live["worker_url"], live["token"], "tools/list", {})
     tools = payload["result"]["tools"]
     names = sorted(tool["name"] for tool in tools)

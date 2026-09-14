@@ -105,6 +105,8 @@ def test_skill_frontmatter_and_behavior() -> None:
         "worker_status",
         "worker_verify",
         "worker_cleanup",
+        "worker_decide",
+        "worker_resume",
         "worktree",
         "branch",
     ):
@@ -114,7 +116,8 @@ def test_skill_frontmatter_and_behavior() -> None:
     assert "Never" in text
     assert "/worker-mcp" in text
     assert "exec_run" in text
-    assert "six worker tools" in flat
+    assert "eight worker tools" in flat
+    assert "six worker tools" not in flat
     assert "five worker tools" not in flat
     assert "worker_wait" in text
     assert "30" in text
@@ -144,12 +147,15 @@ def test_readme_is_self_serve_setup_guide() -> None:
         "worker_status",
         "worker_verify",
         "worker_cleanup",
+        "worker_decide",
+        "worker_resume",
     ):
         assert phrase in text, phrase
     for source in DOC_SOURCES:
         assert source in text, source
     flat = " ".join(text.split())
-    assert "six worker tools" in flat
+    assert "eight worker tools" in flat
+    assert "six worker tools" not in flat
     assert "five worker tools" not in flat
     assert "30" in text
     assert "1-120" in text

@@ -105,9 +105,9 @@ origin stays bound to loopback; TLS terminates upstream.
 Run unauthenticated checks first, then authenticated Streamable HTTP
 checks. `scripts/smoke.sh` checks the deployed worker endpoint only
 (`GET /health` without a token, unauthenticated `POST` is `401`,
-authenticated `tools/list` returns exactly the six `worker_*`
-tools with no `exec_run` (five on older v0.2.x bridges without
-`worker_wait`):
+authenticated `tools/list` returns exactly the eight `worker_*`
+tools with no `exec_run` (six on v0.3.0 bridges without approval
+tools; five on older v0.2.x bridges without `worker_wait`):
 
 ```bash
 export MCP_URL="https://<your-domain>/worker-mcp"
@@ -165,8 +165,9 @@ for url in "https://<your-domain>/mcp" "https://<your-domain>/worker-mcp"; do
 done
 ```
 
-Expect 17 tools on `/mcp` and 6 tools on `/worker-mcp` on v0.3.0
-code (16 and 5 on older v0.2.x bridges without `worker_wait`).
+Expect 19 tools on `/mcp` and 8 tools on `/worker-mcp` on this
+code (17 and 6 on v0.3.0 bridges without approval tools; 16 and 5
+on older v0.2.x bridges without `worker_wait`).
 Then call `worker_catalog` over `/worker-mcp` (defaults: free plus
 connected only) and confirm the configured default model is listed
 first before routing work.
@@ -228,7 +229,7 @@ under the worker URL root; set `OPENCODE_MCP_LIVE_HEALTH_URL`
 explicitly when the bridge is mounted elsewhere.
 
 The gate reports `endpoint`, `health_url`, `revision`
-(`git rev-parse --short HEAD`), worker `tool_count` (expect 6, no
+(`git rev-parse --short HEAD`), worker `tool_count` (expect 8, no
 `exec_run`), `full_tool_count` (wider catalog with `exec_run`,
 worker/full stay separate), `test_result` (`PASS`/`FAIL`), and
 `test_time_s`. Any `FAIL` is a failed gate; roll back per section 5.

@@ -24,6 +24,8 @@ WORKER_TOOLS = (
     "worker_status",
     "worker_verify",
     "worker_cleanup",
+    "worker_decide",
+    "worker_resume",
 )
 HARNESSES = (
     "Codex",
@@ -100,7 +102,7 @@ def test_no_approval_oauth_hosting_or_credential_claims() -> None:
 
 
 def test_first_call_examples_use_safe_endpoint_and_placeholders() -> None:
-    """Curl examples hit /worker-mcp with env-var Bearer, six tools named."""
+    """Curl examples hit /worker-mcp with env-var Bearer, eight tools named."""
     text = _text()
     assert "tools/list" in text
     assert "worker_catalog" in text

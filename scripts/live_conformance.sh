@@ -5,7 +5,7 @@
 # Reports: endpoint, revision, worker tool_count, full tool_count, test result, test time.
 # Needs: curl, jq, git, python3, uv (or pytest fallback), plus POSIX tools.
 # The worker endpoint stays separate from the full endpoint: the gate
-# expects exactly the six worker_* tools with no exec_run on the worker
+# expects exactly the eight worker_* tools with no exec_run on the worker
 # URL, and a wider catalog containing exec_run on the full URL.
 # Auth headers travel in a 0600 temp file (never in the process list);
 # failure output is token-redacted and bounded.
@@ -32,7 +32,7 @@ Env (no arguments; tokens are env-only and never echoed):
   OPENCODE_MCP_LIVE_WAIT_S      worker_wait timeout for the live run (optional, default 10)
 
 Gate: GET health URL is 200 (unauthenticated); worker tools/list is
-exactly six worker tools with no exec_run; full tools/list is wider
+exactly eight worker tools with no exec_run; full tools/list is wider
 with exec_run; then the opt-in live pytest harness runs one disposable
 free-worker lifecycle. Prints endpoint, revision, tool counts, test
 result, and test time. Health contract: unauthenticated GET on the
@@ -169,14 +169,14 @@ open(dst, "w", encoding="utf-8").write(data)
 ' 2>/dev/null || cp "$_in" "$_out" 2>/dev/null || true
 }
 
-echo "== POST tools/list on worker endpoint (expect six worker tools)"
+echo "== POST tools/list on worker endpoint (expect eight worker tools)"
 : > "$NAMES"
 list_tool_names "$WORKER_URL" "$RESP" | sort -u > "$NAMES" || fail "worker tools/list request failed"
 TOOL_COUNT=$(grep -c . "$NAMES" || true)
 TOOL_COUNT=$(printf '%s' "$TOOL_COUNT" | tr -d ' ')
 echo "tool_count=$TOOL_COUNT"
-[ "$TOOL_COUNT" = "6" ] || fail "expected exactly 6 worker tools, got $TOOL_COUNT"
-for want in worker_catalog worker_cleanup worker_run worker_status worker_verify worker_wait; do
+[ "$TOOL_COUNT" = "8" ] || fail "expected exactly 8 worker tools, got $TOOL_COUNT"
+for want in worker_catalog worker_cleanup worker_decide worker_resume worker_run worker_status worker_verify worker_wait; do
     grep -qx "$want" "$NAMES" || fail "missing expected worker tool: $want"
 done
 if grep -qx 'exec_run' "$NAMES"; then
@@ -192,7 +192,7 @@ if [ -n "$FULL_URL" ]; then
         FULL_COUNT=$(printf '%s' "$FULL_COUNT" | tr -d ' ')
         echo "full_tool_count=$FULL_COUNT"
         grep -qx 'exec_run' "$FULL_NAMES" || fail "full endpoint must list exec_run"
-        for want in worker_catalog worker_cleanup worker_run worker_status worker_verify worker_wait; do
+        for want in worker_catalog worker_cleanup worker_decide worker_resume worker_run worker_status worker_verify worker_wait; do
             grep -qx "$want" "$FULL_NAMES" || fail "full endpoint missing worker tool: $want"
         done
     else

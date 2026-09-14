@@ -18,11 +18,11 @@ do not respond, stop and tell the boss the server side needs attention
 instead of retrying blindly.
 
 Default transport is the safe `/worker-mcp` endpoint on your own bridge
-deployment (`https://YOUR-BRIDGE-HOST/worker-mcp`). It exposes exactly six
+deployment (`https://YOUR-BRIDGE-HOST/worker-mcp`). It exposes exactly eight
 worker tools and never includes `exec_run`:
 
 - `worker_catalog`, `worker_run`, `worker_wait`, `worker_status`,
-  `worker_verify`, `worker_cleanup`
+  `worker_verify`, `worker_cleanup`, `worker_decide`, `worker_resume`
 
 Prefer bounded `worker_wait` (`timeout_s` default 30 seconds, server clamp
 1-120 seconds) for progress. It returns on state or message change or at the

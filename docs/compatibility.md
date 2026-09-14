@@ -21,7 +21,7 @@ for production. Never commit a token, password, or private URL.
 
 Runtime validation boundary: automated checks prove the bridge speaks
 MCP Streamable HTTP correctly (401 without a token, 413 on oversize
-bodies, six worker tools on `/worker-mcp` with no `exec_run`, full
+bodies, eight worker tools on `/worker-mcp` with no `exec_run`, full
 catalog on `/mcp`). They do not prove any vendor product accepts the
 config, lists tools, or calls them. Every harness row below is
 protocol-level unless a manual run is recorded with a client version.
@@ -42,7 +42,7 @@ paths, the row says so explicitly.
 | VS Code | `.vscode/mcp.json` (workspace) or user `mcp.json` with `servers` (not `mcpServers`), `type: http`, `url`, `headers`; secrets via `inputs` with `${input:<id>}` or env file, never hardcoded | `tools/list` on `/worker-mcp`, then `worker_catalog` | Automated (doc shape in CI); end-to-end Unverified | https://code.visualstudio.com/docs/agents/reference/mcp-configuration ; https://code.visualstudio.com/docs/agent-customization/mcp-servers |
 | Gemini CLI | `~/.gemini/settings.json` (or project `.gemini/settings.json`) `mcpServers` with `httpUrl` plus `headers` | `tools/list` on `/worker-mcp`, then `worker_catalog` | Automated (doc shape in CI); end-to-end Unverified | https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html ; https://github.com/google-gemini/gemini-cli/blob/HEAD/docs/tools/mcp-server.md |
 | OpenHands | CLI: `openhands mcp add <name> --transport http --header "Authorization: Bearer <token>" <url>`; file/TOML path uses `shttp_servers` with `url` plus `api_key` and optional `timeout` | `tools/list` on `/worker-mcp`, then `worker_catalog` | Unverified; auth boundary: the TOML settings path documents `url` plus `api_key`, not a generic `Authorization` header. The CLI `--header` form is the Bearer path. Confirm the auth field for your OpenHands build in the official docs before use. | https://docs.openhands.dev/openhands/usage/settings/mcp-settings ; https://docs.openhands.dev/openhands/usage/cli/mcp-servers ; https://docs.openhands.dev/openhands/usage/cli/command-reference |
-| Pi / Hermes | Pi: `pi-mcp-adapter` plus shared `~/.config/mcp/mcp.json` with `url`, `auth: bearer`, `bearerTokenEnv: OPENCODE_MCP_BEARER_TOKEN`, `includeTools` (six `worker_*`), `lifecycle: lazy`. Hermes: YAML `mcp_servers` with `url`, `headers.Authorization`, `tools.include` (six `worker_*`) | `tools/list` on `/worker-mcp`, then `worker_catalog` | Automated (doc shape in CI); end-to-end Unverified | https://pi.dev/packages/pi-mcp-adapter ; https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference ; https://github.com/hermes-agent-org/hermes/blob/main/website/docs/guides/use-mcp-with-hermes.md |
+| Pi / Hermes | Pi: `pi-mcp-adapter` plus shared `~/.config/mcp/mcp.json` with `url`, `auth: bearer`, `bearerTokenEnv: OPENCODE_MCP_BEARER_TOKEN`, `includeTools` (eight `worker_*`), `lifecycle: lazy`. Hermes: YAML `mcp_servers` with `url`, `headers.Authorization`, `tools.include` (eight `worker_*`) | `tools/list` on `/worker-mcp`, then `worker_catalog` | Automated (doc shape in CI); end-to-end Unverified | https://pi.dev/packages/pi-mcp-adapter ; https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference ; https://github.com/hermes-agent-org/hermes/blob/main/website/docs/guides/use-mcp-with-hermes.md |
 
 Full per-client blocks stay in `README.md` (Harness setup) and
 `docs/client-setup.md` (Codex, Claude Code). This file is the matrix
@@ -77,10 +77,11 @@ curl -fsS -X POST "$OPENCODE_MCP_URL" \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 
-# Expect six tools with worker_wait on a v0.3.0 bridge
-# (five without worker_wait on older v0.2.x bridges):
+# Expect eight tools on this bridge (six with worker_wait on v0.3.0 bridges,
+# five without worker_wait on older v0.2.x bridges):
 # worker_catalog, worker_run, worker_wait,
-# worker_status, worker_verify, worker_cleanup.
+# worker_status, worker_verify, worker_cleanup,
+# worker_decide, worker_resume.
 ```
 
 ```bash

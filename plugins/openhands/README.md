@@ -54,7 +54,7 @@ export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
 Rules for every URL in this package:
 
 - `https://<your-domain>/worker-mcp` is the safe default. It exposes exactly
-  six worker tools and never includes `exec_run`.
+  eight worker tools and never includes `exec_run`.
 - `https://YOUR-BRIDGE-HOST/worker-mcp` (as shipped in `.mcp.json`) is a
   placeholder. It fails loudly by design. Always register your own URL.
 - There is no shared production server in this package. Self-host for
@@ -116,9 +116,9 @@ shttp_servers = [
 ]
 ```
 
-Check status inside a conversation with `/mcp`. The agent then sees the six
+Check status inside a conversation with `/mcp`. The agent then sees the eight
 worker tools: `worker_catalog`, `worker_run`, `worker_wait`, `worker_status`,
-`worker_verify`, `worker_cleanup`.
+`worker_verify`, `worker_cleanup`, `worker_decide`, `worker_resume`.
 
 Prefer bounded `worker_wait` for progress (`timeout_s` default 30 seconds,
 server clamp 1-120 seconds). It returns on state or message change or at the
