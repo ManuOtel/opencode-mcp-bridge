@@ -50,7 +50,8 @@ fails fast when it is missing; there is no fallback server.
 export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
 ```
 
-Use `/worker-mcp` for the compact five-tool worker endpoint (recommended).
+Use `/worker-mcp` for the compact worker endpoint (recommended:
+five tools on released code, six once the v0.3.0 code lands).
 Use `/mcp` only for legacy full-catalog clients (section 4).
 
 ## 1. Token setup (never print or store the token)
@@ -126,11 +127,13 @@ Use `--name <name>` via the helper to register under a different server name.
 ## 4. Which URL
 
 - New worker clients: `https://<your-domain>/worker-mcp`
-  (exactly the five `worker_*` tools, compact context). This is the
+  (the `worker_*` tools only, compact context: five on released code,
+  six once the v0.3.0 code lands with `worker_wait`). This is the
   recommended endpoint: it never exposes `exec_run`, so a leaked token
   cannot become a direct shell.
 - Existing legacy users keep `/mcp`
-  (`https://<your-domain>/mcp`, full 16-tool catalog). Nothing breaks:
+  (`https://<your-domain>/mcp`, full catalog: 16 tools on released code,
+  17 once the v0.3.0 code lands). Nothing breaks:
   `exec_run` stays listed but fails closed unless the bridge operator sets
   `ENABLE_EXEC_RUN=true` in the deployment env file.
 - Both paths share the same Bearer token. `/health` stays open.
@@ -258,8 +261,8 @@ request time via `${OPENCODE_MCP_URL}` and
 before install, otherwise the transport has no server to reach.
 
 The bundled transport serves the compact worker endpoint
-(`https://<your-domain>/worker-mcp`, exactly the five
-`worker_*` tools) so a leaked token cannot become a direct shell. The plugin
+(`https://<your-domain>/worker-mcp`, the `worker_*` tools only: five on
+released code, six once the v0.3.0 code lands) so a leaked token cannot become a direct shell. The plugin
 cannot guarantee the self-hosted bridge or OpenCode server is reachable;
 if the tools do not respond, check the server side.
 

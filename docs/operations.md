@@ -105,8 +105,9 @@ origin stays bound to loopback; TLS terminates upstream.
 Run unauthenticated checks first, then authenticated Streamable HTTP
 checks. `scripts/smoke.sh` checks the deployed worker endpoint only
 (`GET /health` without a token, unauthenticated `POST` is `401`,
-authenticated `tools/list` returns exactly the five `worker_*` tools
-with no `exec_run`):
+authenticated `tools/list` returns exactly the released five `worker_*`
+tools with no `exec_run`; six once the v0.3.0 code lands with
+`worker_wait`):
 
 ```bash
 export MCP_URL="https://<your-domain>/worker-mcp"
@@ -164,7 +165,8 @@ for url in "https://<your-domain>/mcp" "https://<your-domain>/worker-mcp"; do
 done
 ```
 
-Expect 16 tools on `/mcp` and 5 tools on `/worker-mcp`.
+Expect 16 tools on `/mcp` and 5 tools on `/worker-mcp` on released
+code (17 and 6 once the v0.3.0 code lands with `worker_wait`).
 Then call `worker_catalog` over `/worker-mcp` (defaults: free plus
 connected only) and confirm the configured default model is listed
 first before routing work.

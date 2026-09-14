@@ -21,16 +21,59 @@ requires its own token and is not for production. Placeholder URLs such as
 
 ## Section map
 
-1. [Quick start (60 seconds)](#quick-start-60-seconds)
-2. [Endpoints](#endpoints)
-3. [Harness setup](#harness-setup)
-4. [Worker workflow](#worker-workflow)
-5. [Tools](#tools)
-6. [Security](#security)
-7. [Local deployment](#local-deployment)
-8. [Contributor workflow](#contributor-workflow)
-9. [Publish and discover](#publish-and-discover)
-10. [Community and license](#community-and-license)
+1. [What is new in v0.3.0](#what-is-new-in-v030)
+2. [Quick start (60 seconds)](#quick-start-60-seconds)
+3. [Endpoints](#endpoints)
+4. [Harness setup](#harness-setup)
+5. [Worker workflow](#worker-workflow)
+6. [Tools](#tools)
+7. [Security](#security)
+8. [Local deployment](#local-deployment)
+9. [Contributor workflow](#contributor-workflow)
+10. [Publish and discover](#publish-and-discover)
+11. [Community and license](#community-and-license)
+
+## What is new in v0.3.0
+
+v0.3.0 is a coordinator-ergonomics release. It keeps every v0.2.0
+behavior and adds one tool plus stable task contracts. Everything in
+this section requires the v0.3.0 bridge code; on a v0.2.0 bridge the
+previous behavior still applies (five worker tools, `worker_status`
+polling, no `worker_wait`). Nothing here claims a deployment or a
+registry update.
+
+- `worker_run` stays asynchronous: it starts background work and
+  returns immediately with a `taskID`. It never blocks waiting for
+  the worker to finish.
+- New `worker_wait` (requires v0.3.0 code): a bounded server-side
+  long-poll for one task. It returns when the task state or latest
+  message changes, or at the finite timeout with `timed_out=true`.
+  There is no client sleep loop; the server polls OpenCode about
+  twice per second and returns early on change.
+- `worker_status` stays the immediate snapshot fallback: one
+  read-only look at the current state plus the latest assistant text.
+  Use it after a timed-out wait, after an error, or when you only
+  need one quick look.
+- `worker_verify` stays the evidence gate: the coordinator calls it
+  on a finished worker, then inspects the exact diff and runs tests
+  and lint with the host's own tools before accepting the work.
+- Stable additive task contracts (requires v0.3.0 code): `worker_run`,
+  `worker_wait`, `worker_status`, `worker_verify`, `worker_cleanup`,
+  and `worker_catalog` keep every existing key and add `state`,
+  `timed_out`, `retryable`, `next_action`, `error_code`, and a concise
+  `evidence` object. Existing clients keep working; new coordinators
+  can branch on `next_action` instead of guessing.
+- Tool counts after v0.3.0 lands: `/worker-mcp` exposes six worker
+  tools (the previous five plus `worker_wait`) and never includes
+  `exec_run`; `/mcp` keeps the full compatibility catalog (previous
+  16 plus `worker_wait`). Until you run the v0.3.0 code, the counts
+  stay five and 16.
+- Model policy is unchanged: free Muse Spark 1.3
+  (`opencode/muse-spark-1.3-contributor-free`) is the default worker
+  model. The paid OpenCode Go Muse Spark 1.3 model
+  (`opencode-go/muse-spark-1.3-contributor`) is an explicit fallback
+  only: pass `providerID`/`modelID` explicitly and only when the task
+  owner asked for paid. The bridge never auto-selects paid.
 
 ## Quick start (60 seconds)
 
@@ -57,7 +100,8 @@ at another person's server.
 Rules for every example in this file:
 
 - `https://<your-domain>/worker-mcp` is the safe default. It exposes
-  exactly five worker tools and never includes `exec_run`.
+  the worker tools only (five on released code, six once the v0.3.0
+  code lands with `worker_wait`) and never includes `exec_run`.
 - `https://<your-domain>/mcp` exposes the full legacy catalog, including
   `exec_run` when the operator enables it. Use it only for legacy clients.
 - `https://YOUR-BRIDGE-HOST/worker-mcp` (as shipped in `.mcp.json`) is a
@@ -89,8 +133,8 @@ there is no local stdio command.
 
 | Endpoint | Tools | Use |
 | --- | --- | --- |
-| `/worker-mcp` | Exactly five: `worker_catalog`, `worker_run`, `worker_status`, `worker_verify`, `worker_cleanup` | Default for all new clients. Least privilege; no shell. |
-| `/mcp` | Full 16-tool catalog: the five worker tools plus `list_*`, session tools, `get_diff`, `exec_run` | Legacy clients only. `exec_run` stays listed but fails closed unless `ENABLE_EXEC_RUN=true`. |
+| `/worker-mcp` | Worker tools only: five on released code (`worker_catalog`, `worker_run`, `worker_status`, `worker_verify`, `worker_cleanup`), six once the v0.3.0 code lands (plus `worker_wait`) | Default for all new clients. Least privilege; no shell. |
+| `/mcp` | Full compatibility catalog: 16 tools on released code, 17 once the v0.3.0 code lands (plus `worker_wait`) | Legacy clients only. `exec_run` stays listed but fails closed unless `ENABLE_EXEC_RUN=true`. |
 | `/health` | None (open) | Reverse-proxy checks. |
 
 There is no global tool-profile switch. Both endpoints are always served
@@ -122,7 +166,9 @@ The safe pattern in every client-specific block below: URL
 `https://<your-domain>/worker-mcp`, header
 `Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}`, tools
 `worker_catalog`, `worker_run`, `worker_status`, `worker_verify`,
-`worker_cleanup`.
+`worker_cleanup`. After you run the v0.3.0 bridge code, also allow
+`worker_wait` (bounded long-poll, read-only). The five-tool lists below
+keep working on both versions; add `worker_wait` when your bridge has it.
 
 ### OpenAI Codex CLI
 
@@ -378,15 +424,23 @@ You can also smoke-test the deployment without a client:
 
 ## Worker workflow
 
-Lifecycle, in order. There is no `worker_wait` tool; poll instead.
+Lifecycle, in order. `worker_run` is asynchronous: it starts the
+worker and returns immediately. Then choose sync or async waiting:
 
 ```text
 worker_catalog()
 worker_run(message="Implement X in /path/to/repo", directory="/path/to/repo", title="feat-x")
-worker_status(taskID="<taskID>", directory="/path/to/repo")  # repeat until idle
+# Async (requires v0.3.0 code): repeat until idle or done
+worker_wait(taskID="<taskID>", directory="/path/to/repo", timeout_s=30)
+# Sync fallback (all versions): one immediate snapshot at a time
+worker_status(taskID="<taskID>", directory="/path/to/repo")
 worker_verify(taskID="<taskID>", directory="/path/to/repo")
 worker_cleanup(taskID="<taskID>", directory="/path/to/repo")
 ```
+
+Short flow: catalog, run, wait, verify, clean up. Run returns at
+once; wait blocks server-side until something changes; status takes
+one snapshot; verify gates acceptance; cleanup releases the session.
 
 1. Pick a model: `worker_catalog` (free and connected only by default).
    Default model is `opencode/muse-spark-1.3-contributor-free`. No paid
@@ -397,13 +451,31 @@ worker_cleanup(taskID="<taskID>", directory="/path/to/repo")
    only when the boss asked for paid for that task. The bridge never
    auto-selects paid.
 2. Launch: `worker_run` with `message`, `directory`, `title`, and
-   optional `requestID` for safe retries. Save `taskID` and `directory`.
-3. Poll: `worker_status` with the same `taskID` and `directory` until
-   `idle`. States: `running` (wait), `idle` (verify), `error`/`unknown`
-   (recover, see `skills/recover-opencode-task/SKILL.md`).
+   optional `requestID` for safe retries. It returns immediately with
+   a `taskID` while the worker keeps running in the background. Save
+   `taskID` and `directory`.
+3. Wait (v0.3.0 code) or poll (all versions):
+   - Async: `worker_wait` with the same `taskID` and `directory` and a
+     finite `timeout_s` (default 30, clamped to 1-120). The server
+     holds the call until the task state or latest message changes,
+     then returns with `changed=true`. At the deadline it returns
+     `state` as last seen with `timed_out=true` and
+     `next_action="worker_wait"` so you can call it again. There is no
+     client sleep loop.
+   - Sync: `worker_status` with the same `taskID` and `directory`
+     returns one immediate snapshot. Repeat until `idle`, or use it
+     after a timed-out wait to re-check without waiting.
+   States: `running` (wait again), `idle` (verify), `stale` (clean
+   up), `error`/`unknown` (recover, see
+   `skills/recover-opencode-task/SKILL.md`). On v0.3.0 code each
+   result also carries `timed_out`, `retryable`, `next_action`,
+   `error_code`, and concise `evidence`; follow `next_action`
+   (`worker_wait`, `worker_verify`, `worker_status`, or
+   `worker_cleanup`) instead of guessing.
 4. Verify: call `worker_verify`, then inspect the exact diff and run
    tests and lint with the host's own tools. Never trust a worker
-   summary alone.
+   summary alone. Verification stays the evidence gate: no work is
+   accepted on a summary without diff plus checks.
 5. Clean up: `worker_cleanup` (`action=abort` stops, `action=delete`
    removes) when done.
 
@@ -425,15 +497,26 @@ The plugin skills enforce this workflow: Codex
 
 Full signatures: [docs/tool-api.md](docs/tool-api.md).
 
-Worker tools (also the full `/worker-mcp` catalog):
+Worker tools (also the `/worker-mcp` catalog: five on released code,
+six once the v0.3.0 code lands):
 
 | Tool | What it does |
 | --- | --- |
-| `worker_run` | Start a background worker. Returns `taskID` (= session ID), state, model, directory, title, `requestID`, `deduplicated`. Prompts before running. |
-| `worker_status` | Poll state (`running`/`idle`/`error`/`unknown`) plus latest assistant text only, with truncation counts. Read-only. |
+| `worker_run` | Start a background worker and return immediately. Returns `taskID` (= session ID), state, model, directory, title, `requestID`, `deduplicated`. Prompts before running. |
+| `worker_wait` | Requires v0.3.0 code. Bounded server-side long-poll for one task: returns on state or message change, or at `timeout_s` (default 30, clamped 1-120) with `timed_out=true`. No client sleep loop. Read-only. |
+| `worker_status` | Immediate snapshot fallback: state (`running`/`idle`/`error`/`unknown`/`stale`) plus latest assistant text only, with truncation counts. Read-only. |
 | `worker_catalog` | List models, free and connected only by default, with bridge defaults and ordered `recommendations` (free first, paid fallback second). Read-only. |
-| `worker_verify` | Re-check a finished worker (state plus read-only git evidence). Read-only. |
+| `worker_verify` | Evidence gate before acceptance: re-check a finished worker (state plus read-only git evidence). Read-only. |
 | `worker_cleanup` | Abort (`action=abort`) or delete (`action=delete`) a worker session. Prompts before running. |
+
+Task contracts (require v0.3.0 code; existing keys are unchanged):
+every worker result keeps its old keys and adds `timed_out`,
+`retryable`, `next_action`, `error_code` (for example
+`task_not_found` for a missing task, else `null`), and a concise
+`evidence` object. `next_action` is one of `worker_wait`,
+`worker_verify`, `worker_status`, or `worker_cleanup`: `running`
+waits again, `idle`/`error` verify, `unknown` re-checks status,
+`stale` cleans up.
 
 Legacy tools (`/mcp` only, advanced compatibility):
 
@@ -454,8 +537,9 @@ full-profile equivalents of `worker_cleanup` and `worker_verify`;
 prefer the worker tools.
 
 Per-tool approval ships in `.mcp.json`: `worker_run` and
-`worker_cleanup` prompt; `worker_status`, `worker_catalog`, and
-`worker_verify` auto-approve. If your client ignores that file, enforce
+`worker_cleanup` prompt; `worker_wait`, `worker_status`,
+`worker_catalog`, and `worker_verify` auto-approve (`worker_wait`
+applies once the v0.3.0 code lands). If your client ignores that file, enforce
 the same policy in the client config.
 
 ## Security
@@ -611,9 +695,11 @@ ManuOtel at `https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp`
 only); production users should self-host with their own HTTPS URL and
 token.
 
-Endpoint reminder: `/worker-mcp` (five worker tools, no shell) is
-the default for all new clients; `/mcp` (full legacy catalog,
-`exec_run` opt-in) is legacy only. Never publish an endpoint you do
+Endpoint reminder: `/worker-mcp` (worker tools only, no shell) is
+the default for all new clients; `/mcp` (full compatibility catalog,
+`exec_run` opt-in) is legacy only. Tool counts are five and 16 on
+released code, six and 17 once the v0.3.0 code lands (plus
+`worker_wait`). Never publish an endpoint you do
 not operate, and never commit tokens.
 
 ## Community and license

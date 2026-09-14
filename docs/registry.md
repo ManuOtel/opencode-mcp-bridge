@@ -51,7 +51,9 @@ release is ready to publish.
 - Endpoint checks against your own deployment only: `GET /health` is
   open; `POST /worker-mcp` and `POST /mcp` without a token return
   401; the advertised remote is HTTPS with no credentials in the URL.
-- Advertise `/worker-mcp` (five worker tools, no shell). Mention
+- Advertise `/worker-mcp` (worker tools only, no shell: five on
+  released code, six once the v0.3.0 code lands with `worker_wait`).
+  Mention
   `/mcp` only for legacy clients that need the full catalog.
 
 ## Glama
@@ -82,8 +84,8 @@ only describes the static-Bearer resource so scanners get a valid
 metadata shape instead of an auth error. Static fallback: `GET
 /.well-known/mcp/server-card.json` (plus trailing-slash variant, HEAD
 included) serves the Smithery static card with no secrets: worker
-endpoint tools only (exact five `worker_*`, live descriptions and
-input schemas, never `exec_run`), `authentication: {required: true,
+ endpoint tools only (the released `worker_*` tools, live descriptions and
+ input schemas, never `exec_run`), `authentication: {required: true,
 schemes: ["bearer"]}` with no OAuth claim. Limitation: this does NOT
 enable an OAuth login flow, and a full Smithery scan of the protected
 endpoint still needs the operator to supply the Bearer token out of
