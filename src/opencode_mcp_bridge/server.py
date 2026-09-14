@@ -2930,6 +2930,9 @@ async def worker_status(
         contains active sessions only, so an absent raw status with a
         non-null assistant messageID and no assistant error infers idle;
         absent status with no assistant stays unknown.
+
+    Raises:
+        ValueError: If taskID is empty.
     """
     _obs_start = time.perf_counter()
     _obs_task = observability.safe_task_id(taskID)
@@ -2940,6 +2943,8 @@ async def worker_status(
         task_id=_obs_task,
     )
     try:
+        if not taskID or not taskID.strip():
+            raise ValueError("taskID must not be empty")
         effective_query, effective_dir, stale_record = _resolve_worker_scope(taskID, directory)
         cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
         if isinstance(stale_record, dict) and _is_approval_record(stale_record):
