@@ -203,12 +203,12 @@ The repository is the source of truth for the Codex plugin. The root plugin
 is exposed through the repo-scoped marketplace
 `.agents/plugins/marketplace.json`, which points at the repository root via a
 Git-backed source (`source=url`,
-`https://github.com/ManuOtel/opencode-mcp-bridge.git`, `ref=v0.3.0`). No
-restructuring or plugin duplication was needed. The `v0.3.0` ref is the
+`https://github.com/ManuOtel/opencode-mcp-bridge.git`, `ref=v0.4.0`). No
+restructuring or plugin duplication was needed. The `v0.4.0` ref is the
 stable release tag; it exists only after the maintainer creates it.
 
 ```bash
-codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.3.0
+codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.4.0
 ```
 
 Then install the `opencode-worker` plugin from that marketplace (Plugins
@@ -231,9 +231,9 @@ plugin `opencode-worker` (manifest
 `plugins/claude-code/skills/`) is exposed through the repo-root Claude
 marketplace `.claude-plugin/marketplace.json`, which lists the nested plugin
 via the relative source `./plugins/claude-code` (owner `ManuOtel`,
-version `0.3.0`). The Claude marketplace command installs from the
+version `0.4.0`). The Claude marketplace command installs from the
 checked-out Git revision; the stable release is identified by Git tag
-`v0.3.0` once the maintainer creates it.
+`v0.4.0` once the maintainer creates it.
 
 ```bash
 export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
