@@ -1,26 +1,34 @@
 """Opt-in live endpoint conformance harness. Skips unless configured.
 
-No network unless all required env vars are present, so normal CI
-stays hermetic. Configure a target endpoint per run (local first,
-then deployed):
+No network unless explicit live opt-in env vars are present, so normal
+CI stays hermetic. Live tests require an unmistakable opt-in on every
+run; generic MCP_URL/MCP_BEARER_TOKEN values never enable them.
+Configure a target endpoint per run (local first, then deployed):
 
+  OPENCODE_MCP_LIVE_ENABLE=1 \\
   OPENCODE_MCP_LIVE_WORKER_URL=http://127.0.0.1:8087/worker-mcp \\
-  OPENCODE_MCP_BEARER_TOKEN=<token> \\
+  OPENCODE_MCP_LIVE_BEARER_TOKEN=<token> \\
     uv run pytest tests/test_live_conformance.py -v
 
 Deployed:
 
+  OPENCODE_MCP_LIVE_ENABLE=1 \\
   OPENCODE_MCP_LIVE_WORKER_URL=https://<your-domain>/worker-mcp \\
-  OPENCODE_MCP_BEARER_TOKEN=<token> \\
+  OPENCODE_MCP_LIVE_BEARER_TOKEN=<token> \\
     uv run pytest tests/test_live_conformance.py -v
 
 Optional env:
 
   OPENCODE_MCP_LIVE_FULL_URL   full catalog endpoint (default: sibling
                                /mcp derived from the worker URL).
-  OPENCODE_MCP_LIVE_DIRECTORY  server-side directory for the one
-                               disposable worker run (default: omit and
-                               let the bridge use its default).
+  OPENCODE_MCP_LIVE_HEALTH_URL explicit health URL for the gate
+                               (default: sibling /health derived from
+                               the worker URL root).
+  OPENCODE_MCP_LIVE_DIRECTORY  server-side directory fallback for the
+                               one disposable worker run (default: omit
+                               and let the bridge use its default;
+                               cleanup prefers the server-returned
+                               canonical task directory).
   OPENCODE_MCP_LIVE_WAIT_S     worker_wait timeout for the live run
                                (default 10, clamped 1-30).
 
@@ -31,8 +39,8 @@ endpoint (separation check), worker_catalog model discovery
 behavior, worker_status snapshot, bounded worker_wait, worker_verify
 evidence, worker_cleanup, plus error paths (401 without token, unknown
 tool, missing task, conflicting requestID reuse). Secrets are never
-printed: tokens stay in headers only and never enter assert messages
-or captured output.
+printed: tokens stay in headers only and never enter assert messages,
+fixture reprs, or captured output.
 """
 
 from __future__ import annotations
@@ -68,8 +76,24 @@ def _env(name: str) -> str:
     return (os.environ.get(name) or "").strip()
 
 
+class LiveConfig(dict):  # type: ignore[type-arg]
+    """Live config dict with a redacted repr so pytest never prints tokens."""
+
+    def __repr__(self) -> str:
+        redacted = {k: ("[redacted]" if k == "token" else v) for k, v in self.items()}
+        return f"LiveConfig({redacted!r})"
+
+    __str__ = __repr__
+
+
+def _live_enabled() -> bool:
+    """Unmistakable opt-in: live tests run only with ENABLE=1."""
+    return _env("OPENCODE_MCP_LIVE_ENABLE") == "1"
+
+
 def _live_worker_url() -> str:
-    return _env("OPENCODE_MCP_LIVE_WORKER_URL") or _env("MCP_URL")
+    """Only the explicit live worker URL; generic MCP_URL never enables live."""
+    return _env("OPENCODE_MCP_LIVE_WORKER_URL")
 
 
 def _live_full_url(worker_url: str) -> str:
@@ -81,16 +105,26 @@ def _live_full_url(worker_url: str) -> str:
     return ""
 
 
+def _live_health_url(worker_url: str) -> str:
+    """Explicit health URL, else sibling /health derived from worker root."""
+    explicit = _env("OPENCODE_MCP_LIVE_HEALTH_URL")
+    if explicit:
+        return explicit
+    trimmed = worker_url.rstrip("/")
+    if "/" in trimmed:
+        return trimmed.rsplit("/", 1)[0] + "/health"
+    return trimmed + "/health"
+
+
 def _live_token() -> str:
-    return (
-        _env("OPENCODE_MCP_BEARER_TOKEN")
-        or _env("MCP_BEARER_TOKEN")
-        or _env("MCP_LIVE_BEARER_TOKEN")
-    )
+    """Only the explicit live bearer token; generic tokens never enable live."""
+    return _env("OPENCODE_MCP_LIVE_BEARER_TOKEN")
 
 
 def _live_config() -> dict[str, Any] | None:
-    """Return live config or None when opt-in env is absent."""
+    """Return live config or None when explicit opt-in env is absent."""
+    if not _live_enabled():
+        return None
     worker_url = _live_worker_url()
     token = _live_token()
     if not worker_url or not token:
@@ -101,25 +135,28 @@ def _live_config() -> dict[str, Any] | None:
     except ValueError:
         wait_s = 10
     wait_s = max(1, min(30, wait_s))
-    return {
-        "worker_url": worker_url,
-        "full_url": _live_full_url(worker_url),
-        "token": token,
-        "directory": _env("OPENCODE_MCP_LIVE_DIRECTORY"),
-        "wait_s": wait_s,
-    }
+    return LiveConfig(
+        {
+            "worker_url": worker_url,
+            "full_url": _live_full_url(worker_url),
+            "health_url": _live_health_url(worker_url),
+            "token": token,
+            "directory": _env("OPENCODE_MCP_LIVE_DIRECTORY"),
+            "wait_s": wait_s,
+        }
+    )
 
 
 @pytest.fixture(scope="module")
 def live() -> dict[str, Any]:
-    """Skip cleanly when live configuration is absent."""
+    """Skip cleanly when explicit live opt-in configuration is absent."""
     if httpx is None:
         pytest.skip("httpx is not installed")
     config = _live_config()
     if config is None:
         pytest.skip(
-            "live conformance skipped: set OPENCODE_MCP_LIVE_WORKER_URL "
-            "and OPENCODE_MCP_BEARER_TOKEN to enable"
+            "live conformance skipped: set OPENCODE_MCP_LIVE_ENABLE=1, "
+            "OPENCODE_MCP_LIVE_WORKER_URL, and OPENCODE_MCP_LIVE_BEARER_TOKEN"
         )
     return config
 
@@ -192,7 +229,10 @@ def _call_tool(
 
 
 def _assert_no_secret(payload: dict[str, Any], token: str) -> None:
-    assert token not in json.dumps(payload)
+    """Fail without ever including the raw token value in the message."""
+    serialized = json.dumps(payload)
+    if token and token in serialized:
+        raise AssertionError("response unexpectedly echoes credentials")
 
 
 def test_live_initialize_handshake(live: dict[str, Any]) -> None:
@@ -306,6 +346,7 @@ def test_live_disposable_worker_lifecycle(live: dict[str, Any]) -> None:
         args["directory"] = live["directory"]
 
     task_id = ""
+    task_dir = ""
     try:
         started_at = time.monotonic()
         is_error, first, _ = _call_tool(
@@ -364,8 +405,11 @@ def test_live_disposable_worker_lifecycle(live: dict[str, Any]) -> None:
     finally:
         if task_id:
             cleanup_args: dict[str, Any] = {"taskID": task_id, "action": "delete"}
-            if live["directory"]:
-                cleanup_args["directory"] = live["directory"]
+            # Prefer the server-returned canonical task directory; fall back
+            # to the configured directory only when the server omitted one.
+            cleanup_dir = task_dir or live["directory"]
+            if cleanup_dir:
+                cleanup_args["directory"] = cleanup_dir
             is_error, cleaned, _ = _call_tool(
                 live["worker_url"],
                 live["token"],

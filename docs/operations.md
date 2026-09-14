@@ -182,42 +182,56 @@ is a failed deploy; roll back per section 5.
 prove endpoint conformance against a live bridge with one disposable
 free-worker run (run, duplicate `requestID`, status, bounded
 `worker_wait`, verify, cleanup) plus error paths. Normal `pytest`
-stays network-free: the live module skips cleanly unless the endpoint
-and token env vars are set. The gate never prints bearer tokens.
+stays network-free: the live module skips cleanly unless explicit
+live opt-in env vars are set. Generic `MCP_URL`/`MCP_BEARER_TOKEN`
+values never enable live tests. The gate never prints bearer tokens:
+auth headers travel in a `0600` temp file (never in the process list)
+and failure output is token-redacted and bounded.
 
 Local endpoint first:
 
 ```bash
+export OPENCODE_MCP_LIVE_ENABLE="1"
 export OPENCODE_MCP_LIVE_WORKER_URL="http://127.0.0.1:8087/worker-mcp"
-export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+export OPENCODE_MCP_LIVE_BEARER_TOKEN="<paste-token-here>"
 ./scripts/live_conformance.sh
 ```
 
 Deployed endpoint (same gate, explicit URL only):
 
 ```bash
+export OPENCODE_MCP_LIVE_ENABLE="1"
 export OPENCODE_MCP_LIVE_WORKER_URL="https://<your-domain>/worker-mcp"
-export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+export OPENCODE_MCP_LIVE_BEARER_TOKEN="<paste-token-here>"
 ./scripts/live_conformance.sh
 ```
 
 Optional env: `OPENCODE_MCP_LIVE_FULL_URL` (default: sibling `/mcp`
-derived from the worker URL), `OPENCODE_MCP_LIVE_DIRECTORY`
-(server-side directory for the disposable run; default: bridge
-default), `OPENCODE_MCP_LIVE_WAIT_S` (wait timeout, default 10).
+derived from the worker URL), `OPENCODE_MCP_LIVE_HEALTH_URL`
+(default: sibling `/health` derived from the worker URL root;
+override for nonstandard deployments), `OPENCODE_MCP_LIVE_DIRECTORY`
+(server-side directory fallback for the disposable run; default:
+bridge default; cleanup prefers the server-returned canonical task
+directory), `OPENCODE_MCP_LIVE_WAIT_S` (wait timeout, default 10).
 Direct pytest without the gate:
 
 ```bash
+export OPENCODE_MCP_LIVE_ENABLE="1"
 export OPENCODE_MCP_LIVE_WORKER_URL="http://127.0.0.1:8087/worker-mcp"
-export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
+export OPENCODE_MCP_LIVE_BEARER_TOKEN="<paste-token-here>"
 uv run pytest tests/test_live_conformance.py -v
 ```
 
-The gate reports `endpoint`, `revision` (`git rev-parse --short
-HEAD`), worker `tool_count` (expect 6, no `exec_run`),
-`full_tool_count` (wider catalog with `exec_run`, worker/full stay
-separate), `test_result` (`PASS`/`FAIL`), and `test_time_s`. Any
-`FAIL` is a failed gate; roll back per section 5.
+Health contract: unauthenticated `GET` on the health URL expects
+`200` with no token. The default health URL is sibling `/health`
+under the worker URL root; set `OPENCODE_MCP_LIVE_HEALTH_URL`
+explicitly when the bridge is mounted elsewhere.
+
+The gate reports `endpoint`, `health_url`, `revision`
+(`git rev-parse --short HEAD`), worker `tool_count` (expect 6, no
+`exec_run`), `full_tool_count` (wider catalog with `exec_run`,
+worker/full stay separate), `test_result` (`PASS`/`FAIL`), and
+`test_time_s`. Any `FAIL` is a failed gate; roll back per section 5.
 
 ## 4. Safe bearer rotation (primary plus secondary)
 
