@@ -172,8 +172,9 @@ The safe pattern in every client-specific block below: URL
 `https://<your-domain>/worker-mcp`, header
 `Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}`, tools
 `worker_catalog`, `worker_run`, `worker_wait`, `worker_status`, `worker_verify`,
-`worker_cleanup`. `worker_wait` is the bounded server-side long-poll
-(read-only); drop it only for older v0.2.x bridges. The shorter
+`worker_cleanup`, `worker_decide`, `worker_resume`. `worker_wait` is the bounded
+server-side long-poll (read-only); `worker_decide`/`worker_resume` are approval-gated.
+Drop `worker_wait` only for older v0.2.x bridges. The shorter
 five-tool lists below keep working on both versions; add `worker_wait`
 when your bridge has it.
 
@@ -338,11 +339,12 @@ https://docs.openhands.dev/openhands/usage/cli/mcp-servers):
 
 ```bash
 openhands mcp add opencode-bridge --transport http \
-  --header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN" \
+  --header "Authorization: Bearer <paste-token-here>" \
   "https://<your-domain>/worker-mcp"
 ```
 
-The TOML settings path
+Replace `<paste-token-here>` with the value of `MCP_BEARER_TOKEN` on
+your bridge host. Do not commit the real token. The TOML settings path
 (`https://docs.openhands.dev/openhands/usage/settings/mcp-settings`)
 documents `shttp_servers` with `url` plus `api_key`, not a generic
 `Authorization` header. Unverified end-to-end; confirm the auth field
@@ -429,7 +431,7 @@ pi install npm:pi-mcp-adapter
       "url": "https://<your-domain>/worker-mcp",
       "auth": "bearer",
       "bearerTokenEnv": "OPENCODE_MCP_BEARER_TOKEN",
-      "includeTools": ["worker_catalog", "worker_run", "worker_wait", "worker_status", "worker_verify", "worker_cleanup"],
+      "includeTools": ["worker_catalog", "worker_run", "worker_wait", "worker_status", "worker_verify", "worker_cleanup", "worker_decide", "worker_resume"],
       "lifecycle": "lazy"
     }
   }
@@ -455,7 +457,7 @@ mcp_servers:
     headers:
       Authorization: "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
     tools:
-      include: [worker_catalog, worker_run, worker_wait, worker_status, worker_verify, worker_cleanup]
+      include: [worker_catalog, worker_run, worker_wait, worker_status, worker_verify, worker_cleanup, worker_decide, worker_resume]
       resources: false
       prompts: false
 ```
