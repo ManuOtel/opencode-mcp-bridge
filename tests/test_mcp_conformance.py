@@ -3,7 +3,7 @@
 Covers the worker-first contract without real tokens, paid models,
 remote OpenCode sessions, or deployments:
 - initialize handshake + protocol version negotiation (repo pins 2025-06-18);
-- tools/list exact safe worker surface (6 tools) and full catalog (17 tools);
+- tools/list exact safe worker surface (8 tools) and full catalog (19 tools);
 - truthful input/output schema and MCP annotation exposure on the wire;
 - worker_catalog free-first recommendations (paid fallback is rank 2 only);
 - worker_run requestID deduplication and conflicting reuse;
@@ -37,17 +37,21 @@ WRONG_TOKEN = "conformance-wrong-token-999"
 EXPECTED_WORKER_TOOLS = [
     "worker_catalog",
     "worker_cleanup",
+    "worker_decide",
+    "worker_resume",
     "worker_run",
     "worker_status",
     "worker_verify",
     "worker_wait",
 ]
 
-EXPECTED_FULL_COUNT = 17
+EXPECTED_FULL_COUNT = 19
 
 EXPECTED_READ_ONLY = {
     "worker_catalog": True,
     "worker_cleanup": False,
+    "worker_decide": False,
+    "worker_resume": False,
     "worker_run": False,
     "worker_status": True,
     "worker_verify": True,
@@ -57,6 +61,8 @@ EXPECTED_READ_ONLY = {
 EXPECTED_DESTRUCTIVE = {
     "worker_catalog": False,
     "worker_cleanup": True,
+    "worker_decide": False,
+    "worker_resume": False,
     "worker_run": False,
     "worker_status": False,
     "worker_verify": False,
@@ -66,6 +72,8 @@ EXPECTED_DESTRUCTIVE = {
 EXPECTED_OPEN_WORLD = {
     "worker_catalog": False,
     "worker_cleanup": False,
+    "worker_decide": False,
+    "worker_resume": True,
     "worker_run": True,
     "worker_status": False,
     "worker_verify": False,
@@ -75,6 +83,8 @@ EXPECTED_OPEN_WORLD = {
 EXPECTED_REQUIRED_PARAMS = {
     "worker_catalog": set(),
     "worker_cleanup": {"taskID"},
+    "worker_decide": {"taskID", "decision", "approval_token"},
+    "worker_resume": {"taskID", "approval_token", "message"},
     "worker_run": {"message"},
     "worker_status": {"taskID"},
     "worker_verify": {"taskID"},
@@ -282,7 +292,7 @@ def test_initialize_negotiates_unknown_version_without_leak(
 
 
 def test_worker_tools_list_exact_safe_surface(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The safe endpoint exposes exactly the six worker tools, never exec_run."""
+    """The safe endpoint exposes exactly the eight worker tools, never exec_run."""
     with _make_client(monkeypatch) as client:
         body = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
         tools = _sse_tools(client.post("/worker-mcp", json=body, headers=_headers()))
@@ -292,7 +302,7 @@ def test_worker_tools_list_exact_safe_surface(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_full_tools_list_exact_seventeen(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The legacy endpoint keeps the full 17-tool catalog including exec_run."""
+    """The legacy endpoint keeps the full 19-tool catalog including exec_run."""
     with _make_client(monkeypatch) as client:
         body = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
         tools = _sse_tools(client.post("/mcp", json=body, headers=_headers()))

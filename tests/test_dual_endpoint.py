@@ -104,14 +104,14 @@ def test_auth_required_on_both_mcp_paths(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_tool_catalogs_per_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """/mcp serves the full 17; /worker-mcp serves exactly the six workers."""
+    """/mcp serves the full 19; /worker-mcp serves exactly the eight workers."""
     with _make_client(monkeypatch) as client:
         full = _tool_names(_rpc(client, "/mcp", "tools/list", TOKEN))
         assert full == sorted(server.ALL_TOOL_NAMES)
-        assert len(full) == 17
+        assert len(full) == 19
         worker = _tool_names(_rpc(client, "/worker-mcp", "tools/list", TOKEN))
         assert worker == sorted(server.WORKER_TOOL_NAMES)
-        assert len(worker) == 6
+        assert len(worker) == 8
 
 
 def test_mcp_legacy_names_remain(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -124,7 +124,7 @@ def test_mcp_legacy_names_remain(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_shared_tool_annotations_match() -> None:
-    """All six worker tools carry equal annotations on both servers."""
+    """All eight worker tools carry equal annotations on both servers."""
     import asyncio
 
     def _key(tool) -> tuple:

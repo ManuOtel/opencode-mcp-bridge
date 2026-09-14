@@ -52,6 +52,7 @@ WORKER_INSTRUCTIONS = (
     "Use worker_catalog to pick a model, worker_run to start background work, "
     "worker_wait to wait bounded server-side, worker_status for an immediate "
     "snapshot, worker_verify to check git state, "
+    "worker_decide/worker_resume for approval-gated risky work, "
     "worker_cleanup to abort/delete. Legacy session/message/diff/exec tools "
     "are advanced compatibility only."
 )
@@ -406,6 +407,26 @@ WORKER_WAIT_DEFAULT_TIMEOUT_S = 30.0
 WORKER_WAIT_MIN_TIMEOUT_S = 1.0
 WORKER_WAIT_MAX_TIMEOUT_S = 120.0
 WORKER_WAIT_POLL_S = 0.5
+WORKER_APPROVAL_DEFAULT_TTL_S = 3600
+WORKER_APPROVAL_MIN_TTL_S = 60
+WORKER_APPROVAL_MAX_TTL_S = 86400
+WORKER_APPROVAL_TOKEN_HEX_BYTES = 16
+WORKER_RISKY_ACTION_MAX_CHARS = 100
+WORKER_APPROVAL_ID_PREFIX = "apr_"
+APPROVAL_STATE_REQUIRED = "approval_required"
+APPROVAL_STATE_APPROVED = "approved"
+APPROVAL_STATE_REJECTED = "rejected"
+APPROVAL_STATE_EXPIRED = "expired"
+APPROVAL_STATE_RESUMED = "resumed"
+APPROVAL_TERMINAL_STATES = frozenset(
+    {APPROVAL_STATE_REJECTED, APPROVAL_STATE_EXPIRED, APPROVAL_STATE_RESUMED}
+)
+WORKER_APPROVAL_EXPIRED_HINT = (
+    "Approval expired before resume. Re-run worker_run for this task only."
+)
+WORKER_APPROVAL_RESUME_HINT = (
+    "Approved. Resume this taskID only with worker_resume and the same inputs."
+)
 
 # Stable bounded contracts exposed via FastMCP output_schema (supported in
 # installed FastMCP 4.x: @mcp.tool(output_schema={...}) must be an object
@@ -416,7 +437,7 @@ WORKER_RUN_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "taskID": {"type": "string"},
-        "sessionID": {"type": "string"},
+        "sessionID": {"type": ["string", "null"]},
         "state": {"type": "string"},
         "providerID": {"type": "string"},
         "modelID": {"type": "string"},
@@ -430,6 +451,10 @@ WORKER_RUN_OUTPUT_SCHEMA: dict[str, Any] = {
         "next_action": {"type": "string"},
         "error_code": {"type": ["string", "null"]},
         "evidence": {"type": "object"},
+        "approval_state": {"type": ["string", "null"]},
+        "approval_token": {"type": ["string", "null"]},
+        "risky_action": {"type": ["string", "null"]},
+        "expires_at": {"type": ["number", "null"]},
     },
     "additionalProperties": True,
 }
@@ -437,7 +462,7 @@ WORKER_STATUS_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "taskID": {"type": "string"},
-        "sessionID": {"type": "string"},
+        "sessionID": {"type": ["string", "null"]},
         "state": {"type": "string"},
         "status": {"type": ["string", "null"]},
         "messageID": {"type": ["string", "null"]},
@@ -455,6 +480,9 @@ WORKER_STATUS_OUTPUT_SCHEMA: dict[str, Any] = {
         "next_action": {"type": "string"},
         "error_code": {"type": ["string", "null"]},
         "evidence": {"type": "object"},
+        "approval_state": {"type": ["string", "null"]},
+        "risky_action": {"type": ["string", "null"]},
+        "expires_at": {"type": ["number", "null"]},
     },
     "additionalProperties": True,
 }
@@ -462,7 +490,7 @@ WORKER_WAIT_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "taskID": {"type": "string"},
-        "sessionID": {"type": "string"},
+        "sessionID": {"type": ["string", "null"]},
         "state": {"type": "string"},
         "status": {"type": ["string", "null"]},
         "messageID": {"type": ["string", "null"]},
@@ -483,6 +511,9 @@ WORKER_WAIT_OUTPUT_SCHEMA: dict[str, Any] = {
         "next_action": {"type": "string"},
         "error_code": {"type": ["string", "null"]},
         "evidence": {"type": "object"},
+        "approval_state": {"type": ["string", "null"]},
+        "risky_action": {"type": ["string", "null"]},
+        "expires_at": {"type": ["number", "null"]},
     },
     "additionalProperties": True,
 }
@@ -509,6 +540,9 @@ WORKER_VERIFY_OUTPUT_SCHEMA: dict[str, Any] = {
         "next_action": {"type": "string"},
         "error_code": {"type": ["string", "null"]},
         "evidence": {"type": "object"},
+        "approval_state": {"type": ["string", "null"]},
+        "risky_action": {"type": ["string", "null"]},
+        "expires_at": {"type": ["number", "null"]},
     },
     "additionalProperties": True,
 }
@@ -516,13 +550,57 @@ WORKER_CLEANUP_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "taskID": {"type": "string"},
-        "sessionID": {"type": "string"},
+        "sessionID": {"type": ["string", "null"]},
         "action": {"type": "string"},
         "aborted": {"type": "boolean"},
         "deleted": {"type": "boolean"},
         "directory": {"type": "string"},
         "cleanup_warning": {"type": ["string", "null"]},
         "state": {"type": "string"},
+        "timed_out": {"type": "boolean"},
+        "retryable": {"type": "boolean"},
+        "next_action": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "evidence": {"type": "object"},
+    },
+    "additionalProperties": True,
+}
+WORKER_DECIDE_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "taskID": {"type": "string"},
+        "sessionID": {"type": ["string", "null"]},
+        "state": {"type": "string"},
+        "approval_state": {"type": "string"},
+        "decision": {"type": ["string", "null"]},
+        "risky_action": {"type": ["string", "null"]},
+        "directory": {"type": "string"},
+        "expires_at": {"type": ["number", "null"]},
+        "decided_at": {"type": ["number", "null"]},
+        "deduplicated": {"type": "boolean"},
+        "timed_out": {"type": "boolean"},
+        "retryable": {"type": "boolean"},
+        "next_action": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "evidence": {"type": "object"},
+    },
+    "additionalProperties": True,
+}
+WORKER_RESUME_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "taskID": {"type": "string"},
+        "sessionID": {"type": ["string", "null"]},
+        "state": {"type": "string"},
+        "approval_state": {"type": "string"},
+        "risky_action": {"type": ["string", "null"]},
+        "directory": {"type": "string"},
+        "providerID": {"type": "string"},
+        "modelID": {"type": "string"},
+        "title": {"type": ["string", "null"]},
+        "agent": {"type": ["string", "null"]},
+        "requestID": {"type": ["string", "null"]},
+        "deduplicated": {"type": "boolean"},
         "timed_out": {"type": "boolean"},
         "retryable": {"type": "boolean"},
         "next_action": {"type": "string"},
@@ -592,6 +670,14 @@ def _next_action_for_state(state: str, timed_out: bool) -> str:
         return "worker_verify"
     if state == "unknown":
         return "worker_status"
+    if state == APPROVAL_STATE_REQUIRED:
+        return "worker_decide"
+    if state == APPROVAL_STATE_APPROVED:
+        return "worker_resume"
+    if state in (APPROVAL_STATE_REJECTED, APPROVAL_STATE_EXPIRED):
+        return "worker_run"
+    if state == APPROVAL_STATE_RESUMED:
+        return "worker_wait"
     if timed_out:
         return "worker_wait"
     return "worker_wait" if state == "running" else "worker_status"
@@ -613,6 +699,10 @@ def _retryable_for_state(state: str, timed_out: bool, stale: bool = False) -> bo
         return False
     if state in ("running", "error"):
         return True
+    if state in (APPROVAL_STATE_REQUIRED, APPROVAL_STATE_APPROVED, APPROVAL_STATE_RESUMED):
+        return True
+    if state in (APPROVAL_STATE_REJECTED, APPROVAL_STATE_EXPIRED):
+        return False
     return bool(timed_out)
 
 
@@ -633,6 +723,10 @@ def _error_code_for_snapshot(state: str, status: Any, message_id: Any) -> str | 
     """
     if state == "unknown" and status is None and message_id is None:
         return "task_not_found"
+    if state == APPROVAL_STATE_REJECTED:
+        return "approval_rejected"
+    if state == APPROVAL_STATE_EXPIRED:
+        return "approval_expired"
     return None
 
 
@@ -930,6 +1024,8 @@ WORKER_TOOL_NAMES = frozenset(
         "worker_verify",
         "worker_cleanup",
         "worker_catalog",
+        "worker_decide",
+        "worker_resume",
     }
 )
 ALL_TOOL_NAMES = frozenset(
@@ -951,6 +1047,8 @@ ALL_TOOL_NAMES = frozenset(
         "exec_run",
         "worker_verify",
         "worker_cleanup",
+        "worker_decide",
+        "worker_resume",
     }
 )
 
@@ -1230,6 +1328,8 @@ def _fingerprint_task(
     agent: str | None,
     provider_id: str,
     model_id: str,
+    requires_approval: bool = False,
+    risky_action: str | None = None,
 ) -> str:
     """Hash task inputs to detect conflicting requestID reuse.
 
@@ -1242,6 +1342,8 @@ def _fingerprint_task(
         agent: Optional agent override.
         provider_id: Resolved provider ID.
         model_id: Resolved model ID.
+        requires_approval: Whether the task pauses for approval.
+        risky_action: Optional bounded risky-action descriptor.
 
     Returns:
         Hex SHA256 fingerprint of the canonical inputs.
@@ -1254,11 +1356,275 @@ def _fingerprint_task(
             "agent": agent or "",
             "providerID": provider_id,
             "modelID": model_id,
+            "requires_approval": bool(requires_approval),
+            "risky_action": risky_action or "",
         },
         sort_keys=True,
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _normalize_risky_action(risky_action: str | None) -> str | None:
+    """Validate an optional risky-action descriptor before any side effect.
+
+    Args:
+        risky_action: Caller-supplied action name or None.
+
+    Returns:
+        Stripped descriptor, or None when omitted/blank.
+
+    Raises:
+        ValueError: If the descriptor is over the bounded length.
+    """
+    if risky_action is None:
+        return None
+    cleaned = risky_action.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > WORKER_RISKY_ACTION_MAX_CHARS:
+        raise ValueError(f"risky_action must be at most {WORKER_RISKY_ACTION_MAX_CHARS} chars")
+    return cleaned
+
+
+def _normalize_decision(decision: str | None) -> str:
+    """Normalize an approval decision to approve or reject.
+
+    Args:
+        decision: Raw decision input.
+
+    Returns:
+        Either approve or reject.
+
+    Raises:
+        ValueError: If the decision is missing or not approve/reject.
+    """
+    if decision is None:
+        raise ValueError("decision must be either 'approve' or 'reject'")
+    cleaned = decision.strip().lower()
+    if cleaned in ("approve", "approved"):
+        return "approve"
+    if cleaned in ("reject", "rejected"):
+        return "reject"
+    raise ValueError("decision must be either 'approve' or 'reject'")
+
+
+def _normalize_approval_token(token: str | None) -> str:
+    """Validate a presented approval token before any state change.
+
+    Args:
+        token: Presented approval token.
+
+    Returns:
+        Stripped token.
+
+    Raises:
+        ValueError: If the token is missing, blank, or over-bounded.
+    """
+    if token is None:
+        raise ValueError("approval_token must not be empty")
+    cleaned = token.strip()
+    if not cleaned:
+        raise ValueError("approval_token must not be empty")
+    if len(cleaned) > 128:
+        raise ValueError("approval_token must be at most 128 chars")
+    return cleaned
+
+
+def _approval_ttl_s() -> int:
+    """Return the bounded approval expiry window.
+
+    Reads WORKER_APPROVAL_TTL_S via settings; falls back to the compiled
+    default when settings are unavailable. Never raises.
+
+    Returns:
+        TTL in seconds, always positive and bounded.
+    """
+    try:
+        value = get_settings().worker_approval_ttl_s
+    except RuntimeError:
+        return WORKER_APPROVAL_DEFAULT_TTL_S
+    if isinstance(value, bool) or not isinstance(value, int):
+        return WORKER_APPROVAL_DEFAULT_TTL_S
+    if not (WORKER_APPROVAL_MIN_TTL_S <= value <= WORKER_APPROVAL_MAX_TTL_S):
+        return WORKER_APPROVAL_DEFAULT_TTL_S
+    return value
+
+
+def _new_approval_token() -> str:
+    """Generate a bounded random approval token.
+
+    Returns:
+        Hex token string (never empty, transport-safe).
+    """
+    import secrets as _secrets
+
+    return _secrets.token_hex(WORKER_APPROVAL_TOKEN_HEX_BYTES)
+
+
+def _new_approval_task_id() -> str:
+    """Generate a transport-safe pending approval task ID.
+
+    Returns:
+        ID with the apr_ prefix plus random hex, never an opencode ses_.
+    """
+    import secrets as _secrets
+
+    return f"{WORKER_APPROVAL_ID_PREFIX}{_secrets.token_hex(8)}"
+
+
+def _is_approval_record(record: Any) -> bool:
+    """Check whether a registry record is an approval-gated task.
+
+    Args:
+        record: Stored record or None.
+
+    Returns:
+        True when the record carries an approval_state field.
+    """
+    return isinstance(record, dict) and isinstance(record.get("approval_state"), str)
+
+
+def _approval_expires_at(record: dict[str, Any]) -> float | None:
+    """Return the expiry epoch for an approval record, or None.
+
+    Args:
+        record: Stored approval record.
+
+    Returns:
+        Epoch seconds or None when missing/unusable.
+    """
+    expires = record.get("expires_at")
+    if isinstance(expires, bool) or not isinstance(expires, (int, float)):
+        return None
+    try:
+        return float(expires)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _is_approval_expired(record: dict[str, Any], now: float | None = None) -> bool:
+    """Check whether a pending approval passed its expiry.
+
+    Only approval_required and approved states can expire; terminal
+    states never re-expire.
+
+    Args:
+        record: Stored approval record.
+        now: Epoch override for deterministic tests.
+
+    Returns:
+        True when the record is pending and past expires_at.
+    """
+    state = record.get("approval_state")
+    if state not in (APPROVAL_STATE_REQUIRED, APPROVAL_STATE_APPROVED):
+        return False
+    expires = _approval_expires_at(record)
+    if expires is None:
+        return False
+    current = now if now is not None else time.time()
+    try:
+        return float(current) >= float(expires)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _expire_approval_record(
+    tasks: dict[str, dict[str, Any]], task_id: str, now: float | None = None
+) -> dict[str, Any] | None:
+    """Mark a pending approval expired when past its deadline.
+
+    Args:
+        tasks: Mutable registry map (caller saves after).
+        task_id: Approval task ID.
+        now: Epoch override for deterministic tests.
+
+    Returns:
+        The expired record, or None when no transition happened.
+    """
+    record = tasks.get(task_id)
+    if not isinstance(record, dict) or not _is_approval_record(record):
+        return None
+    if not _is_approval_expired(record, now):
+        return None
+    current = now if now is not None else time.time()
+    record["approval_state"] = APPROVAL_STATE_EXPIRED
+    record["decided_at"] = float(current)
+    return record
+
+
+def _match_approval_token(stored: Any, presented: str) -> bool:
+    """Constant-time compare a stored approval token with the presented one.
+
+    Args:
+        stored: Stored token value.
+        presented: Normalized presented token.
+
+    Returns:
+        True only on an exact match.
+    """
+    if not isinstance(stored, str) or not stored:
+        return False
+    try:
+        return hmac.compare_digest(stored, presented)
+    except (TypeError, ValueError):
+        return False
+
+
+def _build_approval_record(
+    task_id: str,
+    request_id: str | None,
+    fingerprint: str,
+    directory: Any,
+    title: Any,
+    agent: Any,
+    provider_id: str,
+    model_id: str,
+    approval_token: str,
+    risky_action: str | None,
+    expires_at: float,
+    created_at: float | None = None,
+) -> dict[str, Any]:
+    """Build a paused approval record with no prompt or secrets.
+
+    Args:
+        task_id: Pending approval task ID (apr_ prefix, not a session).
+        request_id: Normalized request ID or None.
+        fingerprint: Input hash for same-task resume matching.
+        directory: Effective directory, stored exactly.
+        title: Optional title.
+        agent: Optional agent.
+        provider_id: Resolved provider.
+        model_id: Resolved model.
+        approval_token: Random matching token for decide/resume.
+        risky_action: Bounded descriptor or None.
+        expires_at: Expiry epoch seconds.
+        created_at: Epoch override, defaults to now.
+
+    Returns:
+        Bounded record dict safe for JSON persistence.
+    """
+    dir_text = directory or ""
+    title_text = _bound_text(title or "", TASK_TITLE_MAX_CHARS) if title else None
+    agent_text = _bound_text(agent or "", TASK_AGENT_MAX_CHARS) if agent else None
+    return {
+        "taskID": task_id,
+        "requestID": request_id,
+        "fingerprint": fingerprint,
+        "directory": dir_text,
+        "title": title_text,
+        "agent": agent_text,
+        "providerID": provider_id,
+        "modelID": model_id,
+        "created_at": created_at if created_at is not None else time.time(),
+        "approval_state": APPROVAL_STATE_REQUIRED,
+        "approval_token": approval_token,
+        "risky_action": risky_action,
+        "expires_at": float(expires_at),
+        "decided_at": None,
+        "decision": None,
+        "resume_sessionID": None,
+    }
 
 
 def _load_task_state() -> dict[str, dict[str, Any]]:
@@ -1573,6 +1939,8 @@ async def worker_run(
     providerID: str | None = None,
     modelID: str | None = None,
     requestID: str | None = None,
+    requires_approval: bool = False,
+    risky_action: str | None = None,
 ) -> dict[str, Any]:
     """Start a background worker: create a session and prompt it without waiting.
 
@@ -1599,6 +1967,15 @@ async def worker_run(
     one atomic unit; waiters time out fail-closed instead of
     duplicating work.
 
+    Approval-gated risky work: pass requires_approval=True or a bounded
+    risky_action descriptor to pause before any OpenCode call. The task
+    is recorded as approval_required with a matching approval_token and
+    an expires_at deadline (WORKER_APPROVAL_TTL_S, bounded); no session
+    is created and no prompt is sent until worker_decide approves and
+    worker_resume starts the same task with the same inputs. By default
+    (requires_approval=False and no risky_action) behavior is unchanged
+    and no risky production action is enabled.
+
     Pass the returned directory to worker_status when it differs from the
     configured default: status and messages are directory-scoped. The
     directory is also recoverable from the saved record when omitted.
@@ -1612,12 +1989,18 @@ async def worker_run(
         providerID: Optional model override provider.
         modelID: Optional model override model.
         requestID: Optional idempotency key. Omit to keep legacy behavior.
+        requires_approval: When true, pause as approval_required without
+            any OpenCode side effect until decide plus resume.
+        risky_action: Optional bounded descriptor for the risky action.
+            Any non-blank value also pauses like requires_approval.
 
     Returns:
         Compact dict with taskID (= sessionID), sessionID, state,
         providerID, modelID, directory, title, agent, requestID, and
         deduplicated flag, plus the stable wait-friendly contract
         (timed_out=False, retryable, next_action, error_code, evidence).
+        Approval pauses return state=approval_required with approval_state,
+        approval_token (decide/resume only), risky_action, and expires_at.
         Use worker_wait to wait for progress without client polling and
         worker_status for an immediate snapshot.
     """
@@ -1631,12 +2014,163 @@ async def worker_run(
     )
     try:
         normalized_request = _normalize_request_id(requestID)
+        normalized_risky = _normalize_risky_action(risky_action)
+        approval_needed = bool(requires_approval) or normalized_risky is not None
         authorized_dir = _authorize_optional_directory(directory)
         client = get_client()
         resolved_provider, resolved_model = client.resolve_model(providerID, modelID)
         fingerprint = _fingerprint_task(
-            message, directory, title, agent, resolved_provider, resolved_model
+            message,
+            directory,
+            title,
+            agent,
+            resolved_provider,
+            resolved_model,
+            approval_needed,
+            normalized_risky,
         )
+        if approval_needed:
+            async with _locked_task_registry():
+                stored_tasks = _load_task_state()
+                if normalized_request is not None:
+                    existing = _find_task_by_request(stored_tasks, normalized_request)
+                    if existing is not None:
+                        if existing.get("fingerprint") != fingerprint:
+                            raise ValueError("requestID was already used with different inputs")
+                        if _is_approval_record(existing):
+                            existing_dir = existing.get("directory")
+                            if isinstance(existing_dir, str) and existing_dir.strip():
+                                _authorize_directory(existing_dir)
+                            task_id = existing.get("taskID")
+                            transitioned = _expire_approval_record(
+                                stored_tasks, task_id if isinstance(task_id, str) else ""
+                            )
+                            if transitioned is not None:
+                                _save_task_state(stored_tasks)
+                                existing = transitioned
+                            state_now = (
+                                existing.get("approval_state")
+                                if isinstance(existing, dict)
+                                else None
+                            )
+                            if state_now == APPROVAL_STATE_EXPIRED:
+                                if isinstance(task_id, str):
+                                    stored_tasks.pop(task_id, None)
+                            elif state_now in (
+                                APPROVAL_STATE_REQUIRED,
+                                APPROVAL_STATE_APPROVED,
+                                APPROVAL_STATE_REJECTED,
+                                APPROVAL_STATE_RESUMED,
+                            ):
+                                _obs_result = {
+                                    "taskID": task_id,
+                                    "sessionID": existing.get("resume_sessionID"),
+                                    "state": state_now,
+                                    "providerID": existing.get("providerID", resolved_provider),
+                                    "modelID": existing.get("modelID", resolved_model),
+                                    "directory": existing.get("directory", ""),
+                                    "title": existing.get("title"),
+                                    "agent": existing.get("agent"),
+                                    "requestID": normalized_request,
+                                    "deduplicated": True,
+                                    "timed_out": False,
+                                    "retryable": state_now
+                                    not in (APPROVAL_STATE_REJECTED, APPROVAL_STATE_EXPIRED),
+                                    "next_action": (
+                                        "worker_resume"
+                                        if state_now == APPROVAL_STATE_APPROVED
+                                        else "worker_decide"
+                                        if state_now == APPROVAL_STATE_REQUIRED
+                                        else "worker_run"
+                                    ),
+                                    "error_code": (
+                                        "approval_expired"
+                                        if state_now == APPROVAL_STATE_EXPIRED
+                                        else "approval_rejected"
+                                        if state_now == APPROVAL_STATE_REJECTED
+                                        else None
+                                    ),
+                                    "evidence": {
+                                        "status": state_now,
+                                        "messageID": None,
+                                        "output_chars": 0,
+                                        "total_chars": 0,
+                                    },
+                                    "approval_state": state_now,
+                                    "approval_token": existing.get("approval_token"),
+                                    "risky_action": existing.get("risky_action"),
+                                    "expires_at": existing.get("expires_at"),
+                                }
+                                observability.emit(
+                                    event=observability.EVENT_WORKER,
+                                    tool="worker_run",
+                                    outcome=observability.OUTCOME_SUCCEEDED,
+                                    duration_ms=observability.duration_ms_since(_obs_start),
+                                    request_id=_obs_request,
+                                    task_id=observability.safe_task_id(task_id),
+                                )
+                                return _obs_result
+                            else:
+                                raise ValueError("requestID was already used with different inputs")
+                        else:
+                            raise ValueError("requestID was already used with different inputs")
+                now = time.time()
+                expires_at = now + float(_approval_ttl_s())
+                task_id = _new_approval_task_id()
+                while task_id in stored_tasks:
+                    task_id = _new_approval_task_id()
+                token = _new_approval_token()
+                record = _build_approval_record(
+                    task_id,
+                    normalized_request,
+                    fingerprint,
+                    authorized_dir,
+                    title,
+                    agent,
+                    resolved_provider,
+                    resolved_model,
+                    token,
+                    normalized_risky,
+                    expires_at,
+                    created_at=now,
+                )
+                stored_tasks[task_id] = record
+                _save_task_state(stored_tasks)
+                _obs_result = {
+                    "taskID": task_id,
+                    "sessionID": None,
+                    "state": APPROVAL_STATE_REQUIRED,
+                    "providerID": resolved_provider,
+                    "modelID": resolved_model,
+                    "directory": authorized_dir,
+                    "title": title,
+                    "agent": agent,
+                    "requestID": normalized_request,
+                    "deduplicated": False,
+                    "timed_out": False,
+                    "retryable": True,
+                    "next_action": "worker_decide",
+                    "error_code": None,
+                    "evidence": {
+                        "status": APPROVAL_STATE_REQUIRED,
+                        "messageID": None,
+                        "output_chars": 0,
+                        "total_chars": 0,
+                    },
+                    "approval_state": APPROVAL_STATE_REQUIRED,
+                    "approval_token": token,
+                    "risky_action": normalized_risky,
+                    "expires_at": expires_at,
+                }
+                observability.emit(
+                    event=observability.EVENT_WORKER,
+                    tool="worker_run",
+                    outcome=observability.OUTCOME_SUCCEEDED,
+                    duration_ms=observability.duration_ms_since(_obs_start),
+                    request_id=_obs_request,
+                    task_id=observability.safe_task_id(task_id),
+                )
+                return _obs_result
         async with _locked_task_registry():
             stored_tasks = _load_task_state()
             if normalized_request is not None:
@@ -1675,6 +2209,10 @@ async def worker_run(
                                 "output_chars": 0,
                                 "total_chars": 0,
                             },
+                            "approval_state": None,
+                            "approval_token": None,
+                            "risky_action": None,
+                            "expires_at": None,
                         }
                         observability.emit(
                             event=observability.EVENT_WORKER,
@@ -1749,6 +2287,10 @@ async def worker_run(
                     "output_chars": 0,
                     "total_chars": 0,
                 },
+                "approval_state": None,
+                "approval_token": None,
+                "risky_action": None,
+                "expires_at": None,
             }
             observability.emit(
                 event=observability.EVENT_WORKER,
@@ -1767,6 +2309,369 @@ async def worker_run(
             outcome=observability.outcome_for(_obs_exc),
             duration_ms=observability.duration_ms_since(_obs_start),
             request_id=_obs_request,
+            error_class=_obs_class,
+            status_code=_obs_status,
+        )
+        raise
+
+
+@mcp.tool(
+    output_schema=WORKER_DECIDE_OUTPUT_SCHEMA,
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+@worker_mcp.tool(
+    output_schema=WORKER_DECIDE_OUTPUT_SCHEMA,
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+async def worker_decide(
+    taskID: str,
+    decision: str,
+    approval_token: str,
+    directory: str | None = None,
+) -> dict[str, Any]:
+    """Decide a paused approval-gated task without starting any work.
+
+    Approve moves approval_required to approved (still no OpenCode call;
+    start it with worker_resume and the same inputs). Reject moves it to
+    rejected, terminal. Expired, duplicate, or mismatched decisions fail
+    safely with no state change and no side effects. The approval token
+    must match the token returned by worker_run for the same taskID.
+    An optional directory must canonically match the stored directory
+    when supplied; omitted recovers the stored directory.
+
+    Args:
+        taskID: Pending approval task ID from worker_run (apr_ prefix).
+        decision: Either approve or reject (approved/rejected accepted).
+        approval_token: Matching token returned by worker_run.
+        directory: Optional directory that must match the stored record.
+
+    Returns:
+        Compact dict with taskID, state, approval_state, decision,
+        risky_action, directory, expires_at, decided_at, and the stable
+        wait-friendly contract. Never exposes the token.
+
+    Raises:
+        ValueError: On unknown tasks, mismatched tokens, expired or
+            already-decided approvals, or directory mismatch.
+    """
+    _obs_start = time.perf_counter()
+    _obs_task = observability.safe_task_id(taskID)
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_decide",
+        outcome=observability.OUTCOME_STARTED,
+        task_id=_obs_task,
+    )
+    try:
+        if not taskID or not taskID.strip():
+            raise ValueError("taskID must not be empty")
+        normalized_decision = _normalize_decision(decision)
+        presented = _normalize_approval_token(approval_token)
+        async with _locked_task_registry():
+            stored_tasks = _load_task_state()
+            record = stored_tasks.get(taskID)
+            if not isinstance(record, dict) or not _is_approval_record(record):
+                raise ValueError("unknown approval taskID")
+            stored_dir = record.get("directory")
+            if directory is not None:
+                authorized = _authorize_directory(directory)
+                if not isinstance(stored_dir, str) or not stored_dir.strip():
+                    raise ValueError("directory does not match the approval record")
+                if _realpath_str(stored_dir) != _realpath_str(authorized):
+                    raise ValueError("directory does not match the approval record")
+                effective_dir = authorized
+            elif isinstance(stored_dir, str) and stored_dir.strip():
+                effective_dir = _authorize_directory(stored_dir)
+            else:
+                effective_dir = _authorize_optional_directory(None)
+            if not _match_approval_token(record.get("approval_token"), presented):
+                raise ValueError("approval_token does not match this task")
+            transitioned = _expire_approval_record(stored_tasks, taskID)
+            if transitioned is not None:
+                _save_task_state(stored_tasks)
+                record = transitioned
+            state_now = record.get("approval_state")
+            if state_now == APPROVAL_STATE_EXPIRED:
+                raise ValueError("approval has expired; re-run worker_run for this task only")
+            if state_now != APPROVAL_STATE_REQUIRED:
+                raise ValueError("approval was already decided for this task")
+            now = time.time()
+            if normalized_decision == "approve":
+                record["approval_state"] = APPROVAL_STATE_APPROVED
+                record["decision"] = "approve"
+            else:
+                record["approval_state"] = APPROVAL_STATE_REJECTED
+                record["decision"] = "reject"
+            record["decided_at"] = float(now)
+            _save_task_state(stored_tasks)
+            next_action = "worker_resume" if normalized_decision == "approve" else "worker_run"
+            _obs_result = {
+                "taskID": taskID,
+                "sessionID": record.get("resume_sessionID"),
+                "state": record["approval_state"],
+                "approval_state": record["approval_state"],
+                "decision": record["decision"],
+                "risky_action": record.get("risky_action"),
+                "directory": effective_dir,
+                "expires_at": record.get("expires_at"),
+                "decided_at": record.get("decided_at"),
+                "deduplicated": False,
+                "timed_out": False,
+                "retryable": normalized_decision == "approve",
+                "next_action": next_action,
+                "error_code": None,
+                "evidence": {
+                    "status": record["approval_state"],
+                    "messageID": None,
+                    "output_chars": 0,
+                    "total_chars": 0,
+                },
+            }
+            observability.emit(
+                event=observability.EVENT_WORKER,
+                tool="worker_decide",
+                outcome=observability.OUTCOME_SUCCEEDED,
+                duration_ms=observability.duration_ms_since(_obs_start),
+                task_id=_obs_task,
+                action=normalized_decision,
+            )
+            return _obs_result
+    except Exception as _obs_exc:
+        _obs_class, _obs_status = observability.classify_error(_obs_exc)
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_decide",
+            outcome=observability.outcome_for(_obs_exc),
+            duration_ms=observability.duration_ms_since(_obs_start),
+            task_id=_obs_task,
+            error_class=_obs_class,
+            status_code=_obs_status,
+        )
+        raise
+
+
+@mcp.tool(
+    output_schema=WORKER_RESUME_OUTPUT_SCHEMA,
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+@worker_mcp.tool(
+    output_schema=WORKER_RESUME_OUTPUT_SCHEMA,
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def worker_resume(
+    taskID: str,
+    approval_token: str,
+    message: str,
+    directory: str | None = None,
+) -> dict[str, Any]:
+    """Resume an approved task by starting the deferred worker exactly once.
+
+    Only approval_required tasks that worker_decide approved, with a
+    matching approval_token and the same inputs (message fingerprint),
+    unexpired, and not already resumed, may start. The deferred session
+    is created and prompted once; duplicates, mismatches, rejections,
+    expirations, and re-resumes fail safely with no second session.
+    The prompt text is hashed for same-task matching and never stored.
+
+    Args:
+        taskID: Approved task ID from worker_run (apr_ prefix).
+        approval_token: Matching token returned by worker_run.
+        message: The same task prompt originally paused (matched by hash).
+        directory: Optional directory that must match the stored record.
+
+    Returns:
+        Compact dict with taskID (approval ID), sessionID (new opencode
+        session), state=resumed, approval_state, directory, model, and
+        the stable wait-friendly contract.
+
+    Raises:
+        ValueError: On unknown tasks, mismatched tokens or inputs,
+            unapproved/rejected/expired/already-resumed approvals, or
+            directory mismatch. Registry or prompt failures clean up
+            safely without claiming success.
+    """
+    _obs_start = time.perf_counter()
+    _obs_task = observability.safe_task_id(taskID)
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_resume",
+        outcome=observability.OUTCOME_STARTED,
+        task_id=_obs_task,
+    )
+    try:
+        if not taskID or not taskID.strip():
+            raise ValueError("taskID must not be empty")
+        if not message or not message.strip():
+            raise ValueError("message must not be empty")
+        presented = _normalize_approval_token(approval_token)
+        async with _locked_task_registry():
+            stored_tasks = _load_task_state()
+            record = stored_tasks.get(taskID)
+            if not isinstance(record, dict) or not _is_approval_record(record):
+                raise ValueError("unknown approval taskID")
+            stored_dir = record.get("directory")
+            if directory is not None:
+                authorized = _authorize_directory(directory)
+                if not isinstance(stored_dir, str) or not stored_dir.strip():
+                    raise ValueError("directory does not match the approval record")
+                if _realpath_str(stored_dir) != _realpath_str(authorized):
+                    raise ValueError("directory does not match the approval record")
+                effective_dir = authorized
+            elif isinstance(stored_dir, str) and stored_dir.strip():
+                effective_dir = _authorize_directory(stored_dir)
+            else:
+                effective_dir = _authorize_optional_directory(None)
+            if not _match_approval_token(record.get("approval_token"), presented):
+                raise ValueError("approval_token does not match this task")
+            transitioned = _expire_approval_record(stored_tasks, taskID)
+            if transitioned is not None:
+                _save_task_state(stored_tasks)
+                record = transitioned
+            state_now = record.get("approval_state")
+            if state_now == APPROVAL_STATE_EXPIRED:
+                raise ValueError("approval has expired; re-run worker_run for this task only")
+            if state_now == APPROVAL_STATE_REQUIRED:
+                raise ValueError("approval is still pending; decide approve first")
+            if state_now == APPROVAL_STATE_REJECTED:
+                raise ValueError("approval was rejected for this task")
+            if state_now == APPROVAL_STATE_RESUMED:
+                raise ValueError("approval was already resumed for this task")
+            if state_now != APPROVAL_STATE_APPROVED:
+                raise ValueError("approval is not resumable for this task")
+            provider_id = record.get("providerID")
+            model_id = record.get("modelID")
+            if not isinstance(provider_id, str) or not provider_id:
+                raise ValueError("approval record is missing provider info")
+            if not isinstance(model_id, str) or not model_id:
+                raise ValueError("approval record is missing model info")
+            candidate = _fingerprint_task(
+                message,
+                directory if directory is not None else None,
+                record.get("title"),
+                record.get("agent"),
+                provider_id,
+                model_id,
+                True,
+                record.get("risky_action"),
+            )
+            variants = {
+                candidate,
+                _fingerprint_task(
+                    message,
+                    None,
+                    record.get("title"),
+                    record.get("agent"),
+                    provider_id,
+                    model_id,
+                    True,
+                    record.get("risky_action"),
+                ),
+            }
+            if isinstance(stored_dir, str):
+                variants.add(
+                    _fingerprint_task(
+                        message,
+                        stored_dir,
+                        record.get("title"),
+                        record.get("agent"),
+                        provider_id,
+                        model_id,
+                        True,
+                        record.get("risky_action"),
+                    )
+                )
+            if record.get("fingerprint") not in variants:
+                raise ValueError("message does not match the approved task inputs")
+            client = get_client()
+            stored_title = record.get("title")
+            stored_agent = record.get("agent")
+            session = await client.create_session(stored_title, effective_dir)
+            session_id = session.get("id") if isinstance(session, dict) else None
+            if not session_id:
+                raise ValueError("opencode session response contained no id")
+            try:
+                await client.prompt_async(
+                    session_id, message, provider_id, model_id, stored_agent, effective_dir
+                )
+            except Exception:
+                with suppress(Exception):
+                    await client.delete_session(session_id, effective_dir)
+                raise
+            record["approval_state"] = APPROVAL_STATE_RESUMED
+            record["resume_sessionID"] = session_id
+            try:
+                _save_task_state(stored_tasks)
+            except Exception:
+                with suppress(Exception):
+                    await client.delete_session(session_id, effective_dir)
+                record["approval_state"] = APPROVAL_STATE_APPROVED
+                record["resume_sessionID"] = None
+                with suppress(Exception):
+                    _save_task_state(stored_tasks)
+                raise
+            stored_request = record.get("requestID")
+            _obs_result = {
+                "taskID": taskID,
+                "sessionID": session_id,
+                "state": APPROVAL_STATE_RESUMED,
+                "approval_state": APPROVAL_STATE_RESUMED,
+                "risky_action": record.get("risky_action"),
+                "directory": effective_dir,
+                "providerID": provider_id,
+                "modelID": model_id,
+                "title": stored_title,
+                "agent": stored_agent,
+                "requestID": stored_request,
+                "deduplicated": False,
+                "timed_out": False,
+                "retryable": True,
+                "next_action": "worker_wait",
+                "error_code": None,
+                "evidence": {
+                    "status": APPROVAL_STATE_RESUMED,
+                    "messageID": None,
+                    "output_chars": 0,
+                    "total_chars": 0,
+                },
+            }
+            observability.emit(
+                event=observability.EVENT_WORKER,
+                tool="worker_resume",
+                outcome=observability.OUTCOME_SUCCEEDED,
+                duration_ms=observability.duration_ms_since(_obs_start),
+                task_id=_obs_task,
+                action="resume",
+            )
+            return _obs_result
+    except Exception as _obs_exc:
+        _obs_class, _obs_status = observability.classify_error(_obs_exc)
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_resume",
+            outcome=observability.outcome_for(_obs_exc),
+            duration_ms=observability.duration_ms_since(_obs_start),
+            task_id=_obs_task,
+            action="resume",
             error_class=_obs_class,
             status_code=_obs_status,
         )
@@ -1810,6 +2715,63 @@ def _resolve_worker_scope(
         return effective, effective, saved if isinstance(saved, dict) else None
     effective = _authorize_optional_directory(None)
     return effective, effective, saved if isinstance(saved, dict) else None
+
+
+def _approval_pending_view(
+    taskID: str,
+    record: dict[str, Any],
+    effective_dir: str,
+) -> dict[str, Any] | None:
+    """Build a side-effect-free snapshot for a non-resumed approval.
+
+    Expiry is computed on the fly without registry writes; decide and
+    resume persist the transition under the registry lock. Resumed
+    approvals return None so callers poll the live session instead.
+
+    Args:
+        taskID: Approval task ID.
+        record: Stored approval record.
+        effective_dir: Directory to report.
+
+    Returns:
+        Snapshot dict with approval_state, or None when not applicable.
+    """
+    if not _is_approval_record(record):
+        return None
+    state_now = record.get("approval_state")
+    if state_now == APPROVAL_STATE_RESUMED:
+        return None
+    if state_now in (APPROVAL_STATE_REQUIRED, APPROVAL_STATE_APPROVED) and _is_approval_expired(
+        record
+    ):
+        state_now = APPROVAL_STATE_EXPIRED
+    if state_now not in (
+        APPROVAL_STATE_REQUIRED,
+        APPROVAL_STATE_APPROVED,
+        APPROVAL_STATE_REJECTED,
+        APPROVAL_STATE_EXPIRED,
+    ):
+        return None
+    recovery_hint = WORKER_APPROVAL_EXPIRED_HINT if state_now == APPROVAL_STATE_EXPIRED else None
+    return {
+        "taskID": taskID,
+        "sessionID": None,
+        "state": state_now,
+        "status": state_now,
+        "messageID": None,
+        "output": "",
+        "output_chars": 0,
+        "total_chars": 0,
+        "truncated_chars": 0,
+        "truncated": False,
+        "directory": effective_dir,
+        "stale": False,
+        "stale_reason": None,
+        "recovery_hint": recovery_hint,
+        "approval_state": state_now,
+        "risky_action": record.get("risky_action"),
+        "expires_at": record.get("expires_at"),
+    }
 
 
 async def _snapshot_worker(
@@ -1952,6 +2914,68 @@ async def worker_status(
     try:
         effective_query, effective_dir, stale_record = _resolve_worker_scope(taskID, directory)
         cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
+        if isinstance(stale_record, dict) and _is_approval_record(stale_record):
+            pending = _approval_pending_view(taskID, stale_record, effective_dir)
+            if pending is not None:
+                error_code = _error_code_for_snapshot(pending["state"], None, pending["messageID"])
+                _obs_result = {
+                    **pending,
+                    "timed_out": False,
+                    "retryable": _retryable_for_state(pending["state"], False, False),
+                    "next_action": _next_action_for_state(pending["state"], False),
+                    "error_code": error_code,
+                    "evidence": _worker_evidence(pending["status"], pending["messageID"], 0, 0),
+                }
+                observability.emit(
+                    event=observability.EVENT_WORKER,
+                    tool="worker_status",
+                    outcome=observability.OUTCOME_SUCCEEDED,
+                    duration_ms=observability.duration_ms_since(_obs_start),
+                    task_id=_obs_task,
+                )
+                return _obs_result
+            resume_session = stale_record.get("resume_sessionID")
+            if (
+                stale_record.get("approval_state") == APPROVAL_STATE_RESUMED
+                and isinstance(resume_session, str)
+                and resume_session
+            ):
+                live = await _snapshot_worker(
+                    resume_session,
+                    effective_query,
+                    effective_dir,
+                    None,
+                    include_output,
+                    cap,
+                )
+                _obs_result = {
+                    **live,
+                    "taskID": taskID,
+                    "directory": effective_dir,
+                    "approval_state": APPROVAL_STATE_RESUMED,
+                    "risky_action": stale_record.get("risky_action"),
+                    "expires_at": stale_record.get("expires_at"),
+                    "timed_out": False,
+                    "retryable": _retryable_for_state(live["state"], False, live["stale"]),
+                    "next_action": _next_action_for_state(live["state"], False),
+                    "error_code": _error_code_for_snapshot(
+                        live["state"], live["status"], live["messageID"]
+                    ),
+                    "evidence": _worker_evidence(
+                        live["status"],
+                        live["messageID"],
+                        live["output_chars"],
+                        live["total_chars"],
+                    ),
+                }
+                observability.emit(
+                    event=observability.EVENT_WORKER,
+                    tool="worker_status",
+                    outcome=observability.OUTCOME_SUCCEEDED,
+                    duration_ms=observability.duration_ms_since(_obs_start),
+                    task_id=_obs_task,
+                )
+                return _obs_result
         base = await _snapshot_worker(
             taskID, effective_query, effective_dir, stale_record, include_output, cap
         )
@@ -1965,6 +2989,9 @@ async def worker_status(
             "evidence": _worker_evidence(
                 base["status"], base["messageID"], base["output_chars"], base["total_chars"]
             ),
+            "approval_state": None,
+            "risky_action": None,
+            "expires_at": None,
         }
         observability.emit(
             event=observability.EVENT_WORKER,
@@ -2059,6 +3086,62 @@ async def worker_wait(
         cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
         effective_query, effective_dir, stale_record = _resolve_worker_scope(taskID, directory)
         start = time.monotonic()
+        if isinstance(stale_record, dict) and _is_approval_record(stale_record):
+            pending = _approval_pending_view(taskID, stale_record, effective_dir)
+            if pending is not None:
+                first_error = _error_code_for_snapshot(pending["state"], None, pending["messageID"])
+                return {
+                    **pending,
+                    "timed_out": False,
+                    "changed": False,
+                    "elapsed_s": round(time.monotonic() - start, 3),
+                    "timeout_s": bounded_timeout,
+                    "retryable": _retryable_for_state(pending["state"], False, False),
+                    "next_action": _next_action_for_state(pending["state"], False),
+                    "error_code": first_error,
+                    "evidence": _worker_evidence(pending["status"], None, 0, 0),
+                }
+            resume_session = stale_record.get("resume_sessionID")
+            if (
+                stale_record.get("approval_state") == APPROVAL_STATE_RESUMED
+                and isinstance(resume_session, str)
+                and resume_session
+            ):
+                live = await _snapshot_worker(
+                    resume_session,
+                    effective_query,
+                    effective_dir,
+                    None,
+                    include_output,
+                    cap,
+                )
+                merged: dict[str, Any] = {
+                    **live,
+                    "taskID": taskID,
+                    "directory": effective_dir,
+                    "approval_state": APPROVAL_STATE_RESUMED,
+                    "risky_action": stale_record.get("risky_action"),
+                    "expires_at": stale_record.get("expires_at"),
+                }
+                live_error = _error_code_for_snapshot(
+                    live["state"], live["status"], live["messageID"]
+                )
+                return {
+                    **merged,
+                    "timed_out": False,
+                    "changed": False,
+                    "elapsed_s": round(time.monotonic() - start, 3),
+                    "timeout_s": bounded_timeout,
+                    "retryable": _retryable_for_state(live["state"], False, live["stale"]),
+                    "next_action": _next_action_for_state(live["state"], False),
+                    "error_code": live_error,
+                    "evidence": _worker_evidence(
+                        live["status"],
+                        live["messageID"],
+                        live["output_chars"],
+                        live["total_chars"],
+                    ),
+                }
         first = await _snapshot_worker(
             taskID, effective_query, effective_dir, stale_record, include_output, cap
         )
@@ -2079,6 +3162,9 @@ async def worker_wait(
                 "evidence": _worker_evidence(
                     first["status"], first_message, first["output_chars"], first_total
                 ),
+                "approval_state": None,
+                "risky_action": None,
+                "expires_at": None,
             }
         deadline = start + bounded_timeout
         latest = first
@@ -2112,6 +3198,9 @@ async def worker_wait(
                         current["output_chars"],
                         current["total_chars"],
                     ),
+                    "approval_state": None,
+                    "risky_action": None,
+                    "expires_at": None,
                 }
             latest = current
         return {
@@ -2131,6 +3220,9 @@ async def worker_wait(
                 latest["output_chars"],
                 latest["total_chars"],
             ),
+            "approval_state": None,
+            "risky_action": None,
+            "expires_at": None,
         }
     except Exception as _obs_exc:
         _obs_class, _obs_status = observability.classify_error(_obs_exc)
@@ -2658,6 +3750,184 @@ async def worker_cleanup(
         else:
             effective_dir = _authorize_optional_directory(None)
             query_dir = effective_dir
+        stored_approval: dict[str, Any] | None = None
+        candidate_record = _load_task_state().get(taskID)
+        if isinstance(candidate_record, dict) and _is_approval_record(candidate_record):
+            stored_approval = candidate_record
+            stored_dir_raw = stored_approval.get("directory")
+            if directory is not None:
+                if not isinstance(stored_dir_raw, str) or not stored_dir_raw.strip():
+                    raise ValueError("directory does not match the approval record")
+                if _realpath_str(stored_dir_raw) != _realpath_str(effective_dir):
+                    raise ValueError("directory does not match the approval record")
+            approval_state_now = stored_approval.get("approval_state")
+            if approval_state_now in (
+                APPROVAL_STATE_REQUIRED,
+                APPROVAL_STATE_APPROVED,
+            ) and _is_approval_expired(stored_approval):
+                approval_state_now = APPROVAL_STATE_EXPIRED
+            resume_session = stored_approval.get("resume_sessionID")
+            if not (isinstance(resume_session, str) and resume_session):
+                if normalized == "abort":
+                    _obs_result = {
+                        "taskID": taskID,
+                        "sessionID": None,
+                        "action": "abort",
+                        "aborted": False,
+                        "deleted": False,
+                        "directory": effective_dir,
+                        "cleanup_warning": _bound_text(
+                            "approval has not started; nothing to abort",
+                            WORKER_CLEANUP_WARNING_MAX_CHARS,
+                        ),
+                        "state": approval_state_now,
+                        "timed_out": False,
+                        "retryable": False,
+                        "next_action": "worker_status",
+                        "error_code": None,
+                        "evidence": {
+                            "status": approval_state_now,
+                            "messageID": None,
+                            "output_chars": 0,
+                            "total_chars": 0,
+                        },
+                    }
+                    observability.emit(
+                        event=observability.EVENT_WORKER,
+                        tool="worker_cleanup",
+                        outcome=observability.OUTCOME_SUCCEEDED,
+                        duration_ms=observability.duration_ms_since(_obs_start),
+                        task_id=_obs_task,
+                        action="abort",
+                    )
+                    return _obs_result
+                async with _locked_task_registry():
+                    tasks = _load_task_state()
+                    current = tasks.get(taskID)
+                    if (
+                        not isinstance(current, dict)
+                        or not _is_approval_record(current)
+                        or (
+                            isinstance(current.get("resume_sessionID"), str)
+                            and current.get("resume_sessionID")
+                        )
+                    ):
+                        raise ValueError("approval already started; retry cleanup")
+                    _remove_task_record(taskID)
+                    _obs_result = {
+                        "taskID": taskID,
+                        "sessionID": None,
+                        "action": "delete",
+                        "aborted": False,
+                        "deleted": True,
+                        "directory": effective_dir,
+                        "cleanup_warning": _bound_text(
+                            "approval removed before start",
+                            WORKER_CLEANUP_WARNING_MAX_CHARS,
+                        ),
+                        "state": current.get("approval_state"),
+                        "timed_out": False,
+                        "retryable": False,
+                        "next_action": "worker_run",
+                        "error_code": None,
+                        "evidence": {
+                            "status": current.get("approval_state"),
+                            "messageID": None,
+                            "output_chars": 0,
+                            "total_chars": 0,
+                        },
+                    }
+                    observability.emit(
+                        event=observability.EVENT_WORKER,
+                        tool="worker_cleanup",
+                        outcome=observability.OUTCOME_SUCCEEDED,
+                        duration_ms=observability.duration_ms_since(_obs_start),
+                        task_id=_obs_task,
+                        action="delete",
+                    )
+                    return _obs_result
+            if normalized == "abort":
+                await client.abort_session(resume_session, query_dir)
+                _obs_result = {
+                    "taskID": taskID,
+                    "sessionID": resume_session,
+                    "action": "abort",
+                    "aborted": True,
+                    "deleted": False,
+                    "directory": effective_dir,
+                    "cleanup_warning": None,
+                    "state": "idle",
+                    "timed_out": False,
+                    "retryable": False,
+                    "next_action": "worker_status",
+                    "error_code": None,
+                    "evidence": {
+                        "status": "aborted",
+                        "messageID": None,
+                        "output_chars": 0,
+                        "total_chars": 0,
+                    },
+                }
+                observability.emit(
+                    event=observability.EVENT_WORKER,
+                    tool="worker_cleanup",
+                    outcome=observability.OUTCOME_SUCCEEDED,
+                    duration_ms=observability.duration_ms_since(_obs_start),
+                    task_id=_obs_task,
+                    action="abort",
+                )
+                return _obs_result
+            async with _locked_task_registry():
+                aborted_flag = True
+                try:
+                    await client.abort_session(resume_session, query_dir)
+                except OpencodeError as exc:
+                    if exc.status != 404:
+                        aborted_flag = False
+                    else:
+                        aborted_flag = False
+                except Exception:  # noqa: BLE001 - best-effort abort for resumed approvals
+                    aborted_flag = False
+                try:
+                    await client.delete_session(resume_session, query_dir)
+                except OpencodeError as exc:
+                    if exc.status != 404:
+                        raise
+                _remove_task_record(taskID)
+                _obs_result = {
+                    "taskID": taskID,
+                    "sessionID": resume_session,
+                    "action": "delete",
+                    "aborted": aborted_flag,
+                    "deleted": True,
+                    "directory": effective_dir,
+                    "cleanup_warning": None
+                    if aborted_flag
+                    else _bound_text(
+                        "pre-delete abort failed; session deleted",
+                        WORKER_CLEANUP_WARNING_MAX_CHARS,
+                    ),
+                    "state": "idle",
+                    "timed_out": False,
+                    "retryable": False,
+                    "next_action": "worker_status",
+                    "error_code": None,
+                    "evidence": {
+                        "status": "deleted",
+                        "messageID": None,
+                        "output_chars": 0,
+                        "total_chars": 0,
+                    },
+                }
+                observability.emit(
+                    event=observability.EVENT_WORKER,
+                    tool="worker_cleanup",
+                    outcome=observability.OUTCOME_SUCCEEDED,
+                    duration_ms=observability.duration_ms_since(_obs_start),
+                    task_id=_obs_task,
+                    action="delete",
+                )
+                return _obs_result
         if normalized == "abort":
             await client.abort_session(taskID, query_dir)
             _obs_result = {

@@ -393,6 +393,8 @@ EXPECTED_ANNOTATIONS: dict[str, dict[str, bool]] = {
     "worker_status": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
     "worker_wait": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
     "worker_catalog": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
+    "worker_decide": {"readOnly": False, "destructive": False, "idempotent": False, "open": False},
+    "worker_resume": {"readOnly": False, "destructive": False, "idempotent": False, "open": True},
     "exec_run": {"readOnly": False, "destructive": True, "idempotent": False, "open": True},
     "worker_verify": {"readOnly": True, "destructive": False, "idempotent": True, "open": False},
     "worker_cleanup": {"readOnly": False, "destructive": True, "idempotent": False, "open": False},
@@ -424,13 +426,15 @@ def test_instructions_worker_first_and_bounded() -> None:
         "worker_status",
         "worker_verify",
         "worker_cleanup",
+        "worker_decide",
+        "worker_resume",
     ):
         assert tool in text
     assert "advanced compatibility" in text
 
 
 def test_dual_servers_list_expected_names() -> None:
-    """Full server keeps all 17 tools; worker server exposes six only."""
+    """Full server keeps all 19 tools; worker server exposes eight only."""
     full_names = {t.name for t in asyncio.run(server.mcp.list_tools())}
     assert full_names == set(server.ALL_TOOL_NAMES)
     assert set(server.WORKER_TOOL_NAMES) <= full_names

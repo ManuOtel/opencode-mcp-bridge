@@ -22,6 +22,8 @@ WORKER_TOOLS = (
     "worker_catalog",
     "worker_verify",
     "worker_cleanup",
+    "worker_decide",
+    "worker_resume",
 )
 
 
@@ -87,7 +89,7 @@ def test_claude_marketplace_tracks_claude_manifest() -> None:
 
 
 def test_all_worker_tools_are_merged() -> None:
-    """All six worker tools exist on the server module (no branch-pending API)."""
+    """All eight worker tools exist on the server module (no branch-pending API)."""
     for name in WORKER_TOOLS:
         assert callable(getattr(server, name, None)), f"{name} must be defined"
 

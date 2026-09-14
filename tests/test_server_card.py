@@ -52,7 +52,7 @@ def test_server_card_open_with_truthful_shape(monkeypatch: pytest.MonkeyPatch) -
             assert "oauth" not in response.text.lower()
             names = [tool["name"] for tool in payload["tools"]]
             assert names == sorted(server.WORKER_TOOL_NAMES)
-            assert len(names) == 6
+            assert len(names) == 8
             assert "exec_run" not in names
             for tool in payload["tools"]:
                 assert tool["description"]

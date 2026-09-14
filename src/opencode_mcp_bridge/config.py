@@ -54,6 +54,10 @@ DEFAULT_TASK_STALE_AFTER_S = 600
 TASK_STALE_AFTER_MIN_S = 60
 TASK_STALE_AFTER_MAX_S = 3600
 
+DEFAULT_WORKER_APPROVAL_TTL_S = 3600
+WORKER_APPROVAL_TTL_MIN_S = 60
+WORKER_APPROVAL_TTL_MAX_S = 86400
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -77,6 +81,7 @@ class Settings:
     mcp_max_body_bytes: int
     allowed_origins: tuple[str, ...]
     task_stale_after_s: int
+    worker_approval_ttl_s: int
 
 
 def _normalize_dir(raw: str | None, fallback: str) -> str:
@@ -357,6 +362,9 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         exec_max_chars = int(os.environ.get("EXEC_MAX_OUTPUT_CHARS", "20000"))
         max_body_bytes = int(os.environ.get("MCP_MAX_BODY_BYTES", str(DEFAULT_MCP_MAX_BODY_BYTES)))
         stale_after_s = int(os.environ.get("TASK_STALE_AFTER_S", str(DEFAULT_TASK_STALE_AFTER_S)))
+        approval_ttl_s = int(
+            os.environ.get("WORKER_APPROVAL_TTL_S", str(DEFAULT_WORKER_APPROVAL_TTL_S))
+        )
     except ValueError as exc:
         raise RuntimeError(f"Invalid numeric setting: {exc}") from exc
     if max_body_bytes <= 0:
@@ -365,6 +373,11 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         raise RuntimeError(
             "Invalid TASK_STALE_AFTER_S: must be between "
             f"{TASK_STALE_AFTER_MIN_S} and {TASK_STALE_AFTER_MAX_S}"
+        )
+    if not (WORKER_APPROVAL_TTL_MIN_S <= approval_ttl_s <= WORKER_APPROVAL_TTL_MAX_S):
+        raise RuntimeError(
+            "Invalid WORKER_APPROVAL_TTL_S: must be between "
+            f"{WORKER_APPROVAL_TTL_MIN_S} and {WORKER_APPROVAL_TTL_MAX_S}"
         )
     normalized_default = _normalize_dir(
         os.environ.get("DEFAULT_DIRECTORY"), os.path.expanduser("~")
@@ -394,4 +407,5 @@ def load_settings(dotenv_path: Path | None = None) -> Settings:
         mcp_max_body_bytes=max_body_bytes,
         allowed_origins=allowed_origins,
         task_stale_after_s=stale_after_s,
+        worker_approval_ttl_s=approval_ttl_s,
     )
