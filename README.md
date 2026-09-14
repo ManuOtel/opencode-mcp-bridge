@@ -100,8 +100,8 @@ at another person's server.
 Rules for every example in this file:
 
 - `https://<your-domain>/worker-mcp` is the safe default. It exposes
-  the worker tools only (five on released code, six once the v0.3.0
-  code lands with `worker_wait`) and never includes `exec_run`.
+  the worker tools only (six with `worker_wait`; five on older
+  v0.2.x bridges) and never includes `exec_run`.
 - `https://<your-domain>/mcp` exposes the full legacy catalog, including
   `exec_run` when the operator enables it. Use it only for legacy clients.
 - `https://YOUR-BRIDGE-HOST/worker-mcp` (as shipped in `.mcp.json`) is a
@@ -133,8 +133,8 @@ there is no local stdio command.
 
 | Endpoint | Tools | Use |
 | --- | --- | --- |
-| `/worker-mcp` | Worker tools only: five on released code (`worker_catalog`, `worker_run`, `worker_status`, `worker_verify`, `worker_cleanup`), six once the v0.3.0 code lands (plus `worker_wait`) | Default for all new clients. Least privilege; no shell. |
-| `/mcp` | Full compatibility catalog: 16 tools on released code, 17 once the v0.3.0 code lands (plus `worker_wait`) | Legacy clients only. `exec_run` stays listed but fails closed unless `ENABLE_EXEC_RUN=true`. |
+| `/worker-mcp` | Worker tools only: six with `worker_wait` (`worker_catalog`, `worker_run`, `worker_wait`, `worker_status`, `worker_verify`, `worker_cleanup`; five on older v0.2.x bridges) | Default for all new clients. Least privilege; no shell. |
+| `/mcp` | Full compatibility catalog: 17 with `worker_wait` (16 on older v0.2.x bridges) | Legacy clients only. `exec_run` stays listed but fails closed unless `ENABLE_EXEC_RUN=true`. |
 | `/health` | None (open) | Reverse-proxy checks. |
 
 There is no global tool-profile switch. Both endpoints are always served
@@ -165,10 +165,11 @@ docs before pasting.
 The safe pattern in every client-specific block below: URL
 `https://<your-domain>/worker-mcp`, header
 `Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}`, tools
-`worker_catalog`, `worker_run`, `worker_status`, `worker_verify`,
-`worker_cleanup`. After you run the v0.3.0 bridge code, also allow
-`worker_wait` (bounded long-poll, read-only). The five-tool lists below
-keep working on both versions; add `worker_wait` when your bridge has it.
+`worker_catalog`, `worker_run`, `worker_wait`, `worker_status`, `worker_verify`,
+`worker_cleanup`. `worker_wait` is the bounded server-side long-poll
+(read-only); drop it only for older v0.2.x bridges. The shorter
+five-tool lists below keep working on both versions; add `worker_wait`
+when your bridge has it.
 
 ### OpenAI Codex CLI
 
@@ -180,10 +181,10 @@ Codex reads the token from the environment at request time. Codex plugin
 bundles do not interpolate environment variables in the server URL, so
 register the transport per machine with your concrete URL. There is also
 an `opencode-worker` plugin with worker skills, installed from a Git
-marketplace pinned at `v0.2.0`:
+marketplace pinned at `v0.3.0`:
 
 ```bash
-codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.2.0
+codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.3.0
 ```
 
 Then install `opencode-worker` from that marketplace and register your
@@ -372,7 +373,7 @@ pi install npm:pi-mcp-adapter
       "url": "https://<your-domain>/worker-mcp",
       "auth": "bearer",
       "bearerTokenEnv": "OPENCODE_MCP_BEARER_TOKEN",
-      "includeTools": ["worker_catalog", "worker_run", "worker_status", "worker_verify", "worker_cleanup"],
+      "includeTools": ["worker_catalog", "worker_run", "worker_wait", "worker_status", "worker_verify", "worker_cleanup"],
       "lifecycle": "lazy"
     }
   }
@@ -398,7 +399,7 @@ mcp_servers:
     headers:
       Authorization: "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
     tools:
-      include: [worker_catalog, worker_run, worker_status, worker_verify, worker_cleanup]
+      include: [worker_catalog, worker_run, worker_wait, worker_status, worker_verify, worker_cleanup]
       resources: false
       prompts: false
 ```
@@ -455,13 +456,14 @@ one snapshot; verify gates acceptance; cleanup releases the session.
    a `taskID` while the worker keeps running in the background. Save
    `taskID` and `directory`.
 3. Wait (v0.3.0 code) or poll (all versions):
-   - Async: `worker_wait` with the same `taskID` and `directory` and a
-     finite `timeout_s` (default 30, clamped to 1-120). The server
-     holds the call until the task state or latest message changes,
-     then returns with `changed=true`. At the deadline it returns
-     `state` as last seen with `timed_out=true` and
-     `next_action="worker_wait"` so you can call it again. There is no
-     client sleep loop.
+    - Async: `worker_wait` with the same `taskID` and `directory` and a
+      finite `timeout_s` (default 30, clamped to 1-120). The server
+      holds the call until the task state or latest message changes,
+      then returns with `changed=true`. At the deadline it returns
+      `state` as last seen with `timed_out=true` and
+      `next_action="worker_wait"` so you can call it again. Pass
+      `include_output=false` for a cheap state-only wait. There is no
+      client sleep loop.
    - Sync: `worker_status` with the same `taskID` and `directory`
      returns one immediate snapshot. Repeat until `idle`, or use it
      after a timed-out wait to re-check without waiting.
@@ -497,8 +499,8 @@ The plugin skills enforce this workflow: Codex
 
 Full signatures: [docs/tool-api.md](docs/tool-api.md).
 
-Worker tools (also the `/worker-mcp` catalog: five on released code,
-six once the v0.3.0 code lands):
+Worker tools (also the `/worker-mcp` catalog: six with `worker_wait`;
+five on older v0.2.x bridges):
 
 | Tool | What it does |
 | --- | --- |
@@ -697,9 +699,8 @@ token.
 
 Endpoint reminder: `/worker-mcp` (worker tools only, no shell) is
 the default for all new clients; `/mcp` (full compatibility catalog,
-`exec_run` opt-in) is legacy only. Tool counts are five and 16 on
-released code, six and 17 once the v0.3.0 code lands (plus
-`worker_wait`). Never publish an endpoint you do
+`exec_run` opt-in) is legacy only. Tool counts are six and 17 with
+`worker_wait` (five and 16 on older v0.2.x bridges). Never publish an endpoint you do
 not operate, and never commit tokens.
 
 ## Community and license

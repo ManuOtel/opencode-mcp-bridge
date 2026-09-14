@@ -51,9 +51,8 @@ release is ready to publish.
 - Endpoint checks against your own deployment only: `GET /health` is
   open; `POST /worker-mcp` and `POST /mcp` without a token return
   401; the advertised remote is HTTPS with no credentials in the URL.
-- Advertise `/worker-mcp` (worker tools only, no shell: five on
-  released code, six once the v0.3.0 code lands with `worker_wait`).
-  Mention
+- Advertise `/worker-mcp` (worker tools only, no shell: six with
+  `worker_wait`; five on older v0.2.x bridges). Mention
   `/mcp` only for legacy clients that need the full catalog.
 
 ## Glama

@@ -68,7 +68,7 @@ Use this option first. It is the correct default for code review use.
 
 ### Change-enabled option (full worker access)
 
-This option exposes all five worker tools on released code. Copilot can start (`worker_run`) and delete (`worker_cleanup`) worker sessions on the bridge host. Once the v0.3.0 code lands, also allow `worker_wait` (bounded long-poll, read-only).
+This option exposes all six worker tools. Copilot can start (`worker_run`) and delete (`worker_cleanup`) worker sessions on the bridge host. `worker_wait` is a bounded long-poll (read-only, default 30s, clamped 1-120); drop it only for older v0.2.x bridges.
 
 ```json
 {
@@ -76,7 +76,7 @@ This option exposes all five worker tools on released code. Copilot can start (`
     "opencode-bridge": {
       "type": "http",
       "url": "${COPILOT_MCP_BRIDGE_URL}",
-      "tools": ["worker_catalog", "worker_run", "worker_status", "worker_verify", "worker_cleanup"],
+      "tools": ["worker_catalog", "worker_run", "worker_wait", "worker_status", "worker_verify", "worker_cleanup"],
       "headers": {
         "Authorization": "Bearer ${COPILOT_MCP_BRIDGE_TOKEN}"
       }
@@ -91,7 +91,7 @@ Tradeoff: the change-enabled option lets Copilot run async coding work through y
 
 In Copilot Studio you connect your agent to an existing Streamable HTTP MCP server. You enter your own bridge URL and your own Bearer token. Copilot Studio then reads the tool list from the bridge.
 
-This bridge uses Bearer token authentication. It does not use OAuth in this path. It serves Streamable HTTP at `/mcp` (full catalog) and `/worker-mcp` (worker tools only: five on released code, six once the v0.3.0 code lands with `worker_wait`).
+This bridge uses Bearer token authentication. It does not use OAuth in this path. It serves Streamable HTTP at `/mcp` (full catalog) and `/worker-mcp` (worker tools only: six with `worker_wait`; five on older v0.2.x bridges).
 
 ### Procedure: connect the bridge as an MCP tool
 
@@ -110,7 +110,7 @@ Use the MCP onboarding wizard (recommended path in the Microsoft guide).
 11. Enter `Authorization` as the header name.
 12. Select Create. The Add tool dialog appears.
 13. Select Create a new connection for your MCP server, then select Add to agent.
-14. Verify that the tool list shows the `worker_*` tools (five on released code, six once the v0.3.0 code lands with `worker_wait`).
+14. Verify that the tool list shows the `worker_*` tools (six with `worker_wait`; five on older v0.2.x bridges).
 
 Notes:
 

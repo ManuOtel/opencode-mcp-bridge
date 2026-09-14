@@ -18,6 +18,7 @@ STALE_PHRASES = ("companion branch", "lands via", "if absent here")
 WORKER_TOOLS = (
     "worker_run",
     "worker_status",
+    "worker_wait",
     "worker_catalog",
     "worker_verify",
     "worker_cleanup",
@@ -86,7 +87,7 @@ def test_claude_marketplace_tracks_claude_manifest() -> None:
 
 
 def test_all_worker_tools_are_merged() -> None:
-    """All five worker tools exist on the server module (no branch-pending API)."""
+    """All six worker tools exist on the server module (no branch-pending API)."""
     for name in WORKER_TOOLS:
         assert callable(getattr(server, name, None)), f"{name} must be defined"
 

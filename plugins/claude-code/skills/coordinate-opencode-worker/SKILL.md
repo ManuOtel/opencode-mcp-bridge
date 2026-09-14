@@ -39,14 +39,24 @@ instead of retrying blindly.
 - Do not pass `providerID` without `modelID` (or vice versa). The pair must
   be given together or omitted.
 
-## 3. Poll and recover
+## 3. Wait and recover
 
-- Poll `worker_status` with backoff. States: `running` (keep waiting),
-  `idle` (verify), `error`/`unknown` (recover, do not report success).
+- Prefer bounded `worker_wait` (`timeout_s` default 30, clamped 1-120)
+  for progress: the server holds the call until the task state or
+  latest message changes, then returns. At the deadline it returns
+  `timed_out=true` with `next_action="worker_wait"` so you can call it
+  again. No client sleep loops. `include_output=false` gives a cheap
+  state-only wait.
+- Use `worker_status` for an immediate snapshot only: after a timed-out
+  wait, after an error, or when you need one quick look. States:
+  `running` (wait again), `idle` (verify), `error`/`unknown`
+  (recover, do not report success).
 - Keep `include_output` true and the default cap unless output is huge.
-  `worker_status` returns latest assistant text only, never full history.
-- `unknown` usually means wrong `directory` or a gone session. Re-poll with
-  the exact `directory` returned by `worker_run` before anything else.
+  `worker_wait`/`worker_status` return latest assistant text only,
+  never full history.
+- `unknown` usually means wrong `directory` or a gone session. Re-check
+  once with `worker_status` using the exact `directory` returned by
+  `worker_run` before anything else.
 - `error` means the latest assistant message carries a provider error. Read
   `output` before retrying; the fix may be the prompt, not the infra.
 - Retry at most once with the cause fixed. Never fire parallel retries of
@@ -57,8 +67,7 @@ instead of retrying blindly.
 
 ## 4. Verify before accepting
 
-- Never accept a task from the worker summary alone. Call `worker_verify`
-  first: it re-checks state and evidence without side effects.
+- Call `worker_verify` first: it re-checks state and evidence without side effects. It stays the evidence gate: never accept a task from the worker summary alone.
 - Then inspect the exact diff yourself with the host's own filesystem and
   terminal tools (read the changed files, `git diff`). Check scope: only
   intended files touched, no secrets, no stray artifacts.

@@ -23,6 +23,7 @@ Use when the boss hands work to a background worker instead of doing it inline.
 
 ## Poll async
 
-- Poll `worker_status` with backoff. States: `running` (keep waiting), `idle` (inspect output), `error`/`unknown` (see `recover-opencode-task`).
-- Keep `include_output` true and the default cap unless output is huge. Never dump full history; `worker_status` returns latest assistant text only.
-- When `idle`, move to `verify-opencode-work`. Never report success from the worker summary alone.
+- Prefer bounded `worker_wait` (`timeout_s` default 30, clamped 1-120) for progress; it returns on state or message change or at the deadline with `timed_out=true` and `next_action="worker_wait"` to call again. No client sleep loops.
+- Use `worker_status` for an immediate snapshot only (after a timed-out wait, after an error, or for one quick look). States: `running` (wait again), `idle` (inspect output), `error`/`unknown` (see `recover-opencode-task`).
+- Keep `include_output` true and the default cap unless output is huge. Never dump full history; `worker_status`/`worker_wait` return latest assistant text only. Use `include_output=false` for a cheap state-only check.
+- When `idle`, move to `verify-opencode-work`. Never report success from the worker summary alone; `worker_verify` stays the evidence gate.

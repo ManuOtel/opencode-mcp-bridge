@@ -215,7 +215,7 @@ def test_health_minimal_unauthenticated(monkeypatch: pytest.MonkeyPatch) -> None
     assert PRIMARY not in response.text
 
 
-def test_worker_tools_list_exact_five_without_exec(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_tools_list_exact_six_without_exec(monkeypatch: pytest.MonkeyPatch) -> None:
     """worker tools/list exposes exactly the six worker tools, never exec_run."""
     with _make_client(monkeypatch) as client:
         names = _tool_names(

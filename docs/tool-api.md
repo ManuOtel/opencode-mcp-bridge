@@ -1,7 +1,7 @@
 # Tool API
 
-Worker-first bridge. Bosses use the worker tools (five on released
-code, six once the v0.3.0 code lands); legacy tools are advanced
+Worker-first bridge. Bosses use the six worker tools (five on older
+v0.2.x bridges without `worker_wait`); legacy tools are advanced
 compatibility. Anything marked v0.3.0 below requires the v0.3.0 bridge
 code; on a v0.2.0 bridge the previous behavior still applies.
 
@@ -36,12 +36,15 @@ loop) or take single snapshots with `worker_status` (all versions).
   v0.3.0 adds `timed_out=false`, `retryable=true`,
   `next_action="worker_wait"`, `error_code=null`, and an `evidence`
   object; all existing keys are unchanged.
-- `worker_wait(taskID, directory?, timeout_s=30, max_output_chars=12000)` (requires v0.3.0 code):
+- `worker_wait(taskID, directory?, timeout_s=30, include_output=true, max_output_chars=12000)` (requires v0.3.0 code):
   bounded server-side long-poll for one task. Holds the call until the
   task state or latest message changes, then returns with `changed=true`;
   at the finite deadline it returns the last-seen state with
   `changed=false` and `timed_out=true`. `timeout_s` defaults to 30 and is
-  clamped to 1-120; non-finite values are rejected. No client sleep loop:
+  clamped to 1-120; non-finite values are rejected. Pass
+  `include_output=false` for a cheap state-only wait that skips fetching
+  messages (output fields stay empty, change detection uses state only).
+  No client sleep loop:
   the server re-checks OpenCode about twice per second and returns early
   on change. Output is bounded like `worker_status`. Read-only: never
   creates, prompts, or deletes a session. `next_action` mapping:
@@ -90,8 +93,8 @@ loop) or take single snapshots with `worker_status` (all versions).
 opt-in via `ENABLE_EXEC_RUN=true`, disabled by default).
 
 Security note: `/worker-mcp` is the recommended endpoint. It serves only
-the worker tools (five on released code, six once the v0.3.0 code lands
-with `worker_wait`) and never exposes `exec_run`. Use `/mcp` only
+the worker tools (six with `worker_wait`; five on older v0.2.x bridges)
+and never exposes `exec_run`. Use `/mcp` only
 for legacy compatibility.
 
 ## Endpoints
@@ -99,16 +102,15 @@ for legacy compatibility.
 Two Streamable HTTP endpoints share one Bearer token; `GET /health` stays open.
 
 - `/mcp`: full backward-compatible catalog for existing clients
-  (16 tools on released code, 17 once the v0.3.0 code lands with
-  `worker_wait`: `worker_*` plus `list_*`, `create_session`, `send_message`, `get_session`,
+  (17 with `worker_wait`, 16 on older v0.2.x bridges: `worker_*` plus `list_*`, `create_session`, `send_message`, `get_session`,
   `list_messages`, `abort_session`, `delete_session`, `get_diff`, `exec_run`).
   `exec_run` stays listed for compatibility but fails closed unless
   `ENABLE_EXEC_RUN=true`; production hosts that need it set the flag
   explicitly in the deployment env file.
-- `/worker-mcp`: only the worker tools (five on released code:
+- `/worker-mcp`: only the worker tools (six with `worker_wait`:
   `worker_catalog`,
-  `worker_run`, `worker_status`, `worker_verify`, `worker_cleanup`;
-  six once the v0.3.0 code lands, plus `worker_wait`) so plugin
+  `worker_run`, `worker_wait`, `worker_status`, `worker_verify`, `worker_cleanup`;
+  five on older v0.2.x bridges without `worker_wait`) so plugin
   hosts avoid context bloat. The Codex plugin (`.mcp.json`) points here.
 
 There is no global tool-profile switch: both endpoints are always served from

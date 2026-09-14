@@ -492,7 +492,17 @@ WORKER_VERIFY_OUTPUT_SCHEMA: dict[str, Any] = {
         "taskID": {"type": "string"},
         "sessionID": {"type": "string"},
         "state": {"type": "string"},
+        "status": {"type": ["string", "null"]},
+        "messageID": {"type": ["string", "null"]},
+        "output": {"type": ["string", "null"]},
+        "output_chars": {"type": "integer"},
+        "total_chars": {"type": "integer"},
+        "truncated_chars": {"type": "integer"},
+        "truncated": {"type": "boolean"},
         "directory": {"type": "string"},
+        "stale": {"type": "boolean"},
+        "stale_reason": {"type": ["string", "null"]},
+        "recovery_hint": {"type": ["string", "null"]},
         "verification": {"type": "object"},
         "timed_out": {"type": "boolean"},
         "retryable": {"type": "boolean"},
@@ -3120,7 +3130,7 @@ RESOURCE_DOCUMENTATION_URL = "https://github.com/ManuOtel/opencode-mcp-bridge"
 WELL_KNOWN_PREFIX = "/.well-known/oauth-protected-resource"
 MCP_RESOURCE_SUFFIXES = {"": "", "/mcp": "/mcp", "/worker-mcp": "/worker-mcp"}
 SERVER_CARD_PATH = "/.well-known/mcp/server-card.json"
-SERVER_CARD_FALLBACK_VERSION = "0.2.0"
+SERVER_CARD_FALLBACK_VERSION = "0.3.0"
 
 
 def _public_base_url(scope: Any, headers: dict[bytes, bytes]) -> str:

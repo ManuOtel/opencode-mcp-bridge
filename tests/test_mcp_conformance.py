@@ -3,7 +3,7 @@
 Covers the worker-first contract without real tokens, paid models,
 remote OpenCode sessions, or deployments:
 - initialize handshake + protocol version negotiation (repo pins 2025-06-18);
-- tools/list exact safe worker surface (5 tools) and full catalog (16 tools);
+- tools/list exact safe worker surface (6 tools) and full catalog (17 tools);
 - truthful input/output schema and MCP annotation exposure on the wire;
 - worker_catalog free-first recommendations (paid fallback is rank 2 only);
 - worker_run requestID deduplication and conflicting reuse;
@@ -40,9 +40,10 @@ EXPECTED_WORKER_TOOLS = [
     "worker_run",
     "worker_status",
     "worker_verify",
+    "worker_wait",
 ]
 
-EXPECTED_FULL_COUNT = 16
+EXPECTED_FULL_COUNT = 17
 
 EXPECTED_READ_ONLY = {
     "worker_catalog": True,
@@ -50,6 +51,7 @@ EXPECTED_READ_ONLY = {
     "worker_run": False,
     "worker_status": True,
     "worker_verify": True,
+    "worker_wait": True,
 }
 
 EXPECTED_DESTRUCTIVE = {
@@ -58,6 +60,7 @@ EXPECTED_DESTRUCTIVE = {
     "worker_run": False,
     "worker_status": False,
     "worker_verify": False,
+    "worker_wait": False,
 }
 
 EXPECTED_OPEN_WORLD = {
@@ -66,6 +69,7 @@ EXPECTED_OPEN_WORLD = {
     "worker_run": True,
     "worker_status": False,
     "worker_verify": False,
+    "worker_wait": False,
 }
 
 EXPECTED_REQUIRED_PARAMS = {
@@ -74,6 +78,7 @@ EXPECTED_REQUIRED_PARAMS = {
     "worker_run": {"message"},
     "worker_status": {"taskID"},
     "worker_verify": {"taskID"},
+    "worker_wait": {"taskID"},
 }
 
 
@@ -277,7 +282,7 @@ def test_initialize_negotiates_unknown_version_without_leak(
 
 
 def test_worker_tools_list_exact_safe_surface(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The safe endpoint exposes exactly the five worker tools, never exec_run."""
+    """The safe endpoint exposes exactly the six worker tools, never exec_run."""
     with _make_client(monkeypatch) as client:
         body = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
         tools = _sse_tools(client.post("/worker-mcp", json=body, headers=_headers()))
@@ -286,8 +291,8 @@ def test_worker_tools_list_exact_safe_surface(monkeypatch: pytest.MonkeyPatch) -
     assert "exec_run" not in names
 
 
-def test_full_tools_list_exact_sixteen(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The legacy endpoint keeps the full 16-tool catalog including exec_run."""
+def test_full_tools_list_exact_seventeen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The legacy endpoint keeps the full 17-tool catalog including exec_run."""
     with _make_client(monkeypatch) as client:
         body = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
         tools = _sse_tools(client.post("/mcp", json=body, headers=_headers()))
@@ -329,6 +334,26 @@ def test_tools_list_schema_and_annotations_truthful(
         assert annotations["readOnlyHint"] is bool(live[name].annotations.read_only_hint)
         assert annotations["destructiveHint"] is bool(live[name].annotations.destructive_hint)
         assert annotations["openWorldHint"] is bool(live[name].annotations.open_world_hint)
+
+
+def test_worker_verify_output_schema_advertises_status_fields(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The verify wire schema covers every field worker_verify actually returns."""
+    _patch(monkeypatch)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    result = asyncio.run(server.worker_verify("ses_1", directory=str(plain)))
+    assert result["verification"]["ok"] is False
+    assert result["verification"]["directory"] == str(plain)
+    advertised = set(server.WORKER_VERIFY_OUTPUT_SCHEMA["properties"])
+    assert "verification" in advertised
+    # worker_verify merges a full worker_status snapshot, so every status
+    # schema property must also be advertised on the verify schema.
+    assert set(server.WORKER_STATUS_OUTPUT_SCHEMA["properties"]) <= advertised
+    # And every top-level key actually returned must be advertised.
+    unadvertised = set(result) - advertised
+    assert unadvertised == set(), f"verify returns unadvertised fields: {sorted(unadvertised)}"
 
 
 def test_worker_catalog_free_first_recommendations(
@@ -444,15 +469,20 @@ def test_status_verify_cleanup_error_and_scope(
 
     fake.delete_error = OpencodeError("DELETE", "/session/x", 404, "gone")
     removed = asyncio.run(server.worker_cleanup(task_id, "/tmp/w", action="delete"))
-    assert removed == {
-        "taskID": task_id,
-        "sessionID": task_id,
-        "action": "delete",
-        "aborted": True,
-        "deleted": True,
-        "directory": "/tmp/w",
-        "cleanup_warning": "session already gone; record removed",
-    }
+    assert removed["taskID"] == task_id
+    assert removed["sessionID"] == task_id
+    assert removed["action"] == "delete"
+    assert removed["aborted"] is True
+    assert removed["deleted"] is True
+    assert removed["directory"] == "/tmp/w"
+    assert removed["cleanup_warning"] == "session already gone; record removed"
+    # Additive v0.3.0 contract rides along with the legacy cleanup keys.
+    assert removed["state"] == "unknown"
+    assert removed["timed_out"] is False
+    assert removed["retryable"] is False
+    assert removed["next_action"] == "worker_status"
+    assert removed["error_code"] is None
+    assert removed["evidence"]["status"] == "deleted"
     stored = server._load_task_state()
     assert task_id not in stored
     assert other_id in stored

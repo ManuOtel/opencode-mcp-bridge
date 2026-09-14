@@ -12,6 +12,7 @@ README = REPO / "README.md"
 MAINTAINER_URL = "https://opencode-mcp.manuotel.com/worker-mcp"
 WORKER_TOOLS = (
     "worker_run",
+    "worker_wait",
     "worker_status",
     "worker_catalog",
     "worker_verify",

@@ -261,7 +261,7 @@ Goal: adopt newer MCP capabilities only where they remove real pain
 in this coordinator, without bloating worker context.
 
 Why it matters: new spec features add surface and context weight.
-The worker endpoint stays at five tools for a reason.
+The worker endpoint stays at six tools for a reason.
 
 Prerequisites: phases 1 and 2; a written pain statement per proposal
 (for example polling cost, skill distribution, rich client UI).
@@ -269,8 +269,8 @@ Prerequisites: phases 1 and 2; a written pain statement per proposal
 Implementation slices:
 
 1. Evaluate MCP Tasks (or equivalent async primitive) against the
-   current `worker_run` plus `worker_status` poll loop. Adopt only if
-   it cuts polling or fixes cancellation. Keep the five-tool shape.
+   current `worker_run` plus bounded `worker_wait` loop. Adopt only if
+   it cuts polling or fixes cancellation. Keep the six-tool shape.
 2. Evaluate MCP Skills distribution against the current Codex and
    Claude plugin skills. Adopt only if it simplifies install without
    duplicating `skills/` content.
@@ -381,7 +381,7 @@ One focused task at a time. Parallel workers never share a checkout.
    `.codex-plugin/plugin.json`, `.mcp.json`, Claude marketplace
    JSON; version coherence test passes.
 4. Smoke passes: `/health`, 401 without token, 413 on oversize body,
-   five tools on `/worker-mcp`, 16 tools on `/mcp`.
+   six tools on `/worker-mcp`, 17 tools on `/mcp`.
 5. Docs list only tested install paths with client versions.
 6. Tag, merge sequentially, deploy from the clean tag worktree,
    smoke again, clean up merged worktrees.
