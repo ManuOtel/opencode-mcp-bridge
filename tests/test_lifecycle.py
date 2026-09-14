@@ -134,7 +134,7 @@ def test_worker_cleanup_abort_and_delete(monkeypatch: pytest.MonkeyPatch) -> Non
         return abort, delete
 
     abort, delete = asyncio.run(run())
-    assert abort == {
+    for key, expected in {
         "taskID": "ses_1",
         "sessionID": "ses_1",
         "action": "abort",
@@ -142,7 +142,14 @@ def test_worker_cleanup_abort_and_delete(monkeypatch: pytest.MonkeyPatch) -> Non
         "deleted": False,
         "directory": "/tmp/w",
         "cleanup_warning": None,
-    }
+    }.items():
+        assert abort[key] == expected
+    # Stable contract is additive: legacy keys above plus wait-friendly fields.
+    assert abort["timed_out"] is False
+    assert abort["retryable"] is False
+    assert abort["next_action"] == "worker_status"
+    assert abort["error_code"] is None
+    assert abort["evidence"]["status"] == "aborted"
     assert delete["action"] == "delete"
     assert delete["aborted"] is True
     assert delete["deleted"] is True

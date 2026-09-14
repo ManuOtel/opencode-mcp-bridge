@@ -1,7 +1,7 @@
 """FastMCP server bridging MCP clients to local opencode.
 
-Transport: Streamable HTTP at POST /mcp (full 16-tool catalog, stateless)
-and POST /worker-mcp (five worker_* tools only, stateless). Works with
+Transport: Streamable HTTP at POST /mcp (full 17-tool catalog, stateless)
+and POST /worker-mcp (six worker_* tools only, stateless). Works with
 ChatGPT, Claude Code, Codex, and other MCP-compatible harnesses.
 Auth: static Bearer token on every /mcp and /worker-mcp request, with an
 optional secondary rotation token for overlap (see README rotation steps);
@@ -50,7 +50,8 @@ from opencode_mcp_bridge.opencode_client import OpencodeClient, OpencodeError
 WORKER_INSTRUCTIONS = (
     "Worker-first bridge to self-hosted opencode. "
     "Use worker_catalog to pick a model, worker_run to start background work, "
-    "worker_status to poll output, worker_verify to check git state, "
+    "worker_wait to wait bounded server-side, worker_status for an immediate "
+    "snapshot, worker_verify to check git state, "
     "worker_cleanup to abort/delete. Legacy session/message/diff/exec tools "
     "are advanced compatibility only."
 )
@@ -401,6 +402,252 @@ WORKER_STALE_RECOVERY_HINT = (
     "Stale worker: running with empty output past the startup timeout. "
     "Run worker_cleanup action=delete for this taskID only."
 )
+WORKER_WAIT_DEFAULT_TIMEOUT_S = 30.0
+WORKER_WAIT_MIN_TIMEOUT_S = 1.0
+WORKER_WAIT_MAX_TIMEOUT_S = 120.0
+WORKER_WAIT_POLL_S = 0.5
+
+# Stable bounded contracts exposed via FastMCP output_schema (supported in
+# installed FastMCP 4.x: @mcp.tool(output_schema={...}) must be an object
+# schema). Dict returns stay backward compatible: existing keys are never
+# removed or renamed, contract keys are additive only, and text rendering
+# is unchanged.
+WORKER_RUN_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "taskID": {"type": "string"},
+        "sessionID": {"type": "string"},
+        "state": {"type": "string"},
+        "providerID": {"type": "string"},
+        "modelID": {"type": "string"},
+        "directory": {"type": "string"},
+        "title": {"type": ["string", "null"]},
+        "agent": {"type": ["string", "null"]},
+        "requestID": {"type": ["string", "null"]},
+        "deduplicated": {"type": "boolean"},
+        "timed_out": {"type": "boolean"},
+        "retryable": {"type": "boolean"},
+        "next_action": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "evidence": {"type": "object"},
+    },
+    "additionalProperties": True,
+}
+WORKER_STATUS_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "taskID": {"type": "string"},
+        "sessionID": {"type": "string"},
+        "state": {"type": "string"},
+        "status": {"type": ["string", "null"]},
+        "messageID": {"type": ["string", "null"]},
+        "output": {"type": ["string", "null"]},
+        "output_chars": {"type": "integer"},
+        "total_chars": {"type": "integer"},
+        "truncated_chars": {"type": "integer"},
+        "truncated": {"type": "boolean"},
+        "directory": {"type": "string"},
+        "stale": {"type": "boolean"},
+        "stale_reason": {"type": ["string", "null"]},
+        "recovery_hint": {"type": ["string", "null"]},
+        "timed_out": {"type": "boolean"},
+        "retryable": {"type": "boolean"},
+        "next_action": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "evidence": {"type": "object"},
+    },
+    "additionalProperties": True,
+}
+WORKER_WAIT_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "taskID": {"type": "string"},
+        "sessionID": {"type": "string"},
+        "state": {"type": "string"},
+        "status": {"type": ["string", "null"]},
+        "messageID": {"type": ["string", "null"]},
+        "output": {"type": ["string", "null"]},
+        "output_chars": {"type": "integer"},
+        "total_chars": {"type": "integer"},
+        "truncated_chars": {"type": "integer"},
+        "truncated": {"type": "boolean"},
+        "directory": {"type": "string"},
+        "stale": {"type": "boolean"},
+        "stale_reason": {"type": ["string", "null"]},
+        "recovery_hint": {"type": ["string", "null"]},
+        "timed_out": {"type": "boolean"},
+        "changed": {"type": "boolean"},
+        "elapsed_s": {"type": "number"},
+        "timeout_s": {"type": "number"},
+        "retryable": {"type": "boolean"},
+        "next_action": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "evidence": {"type": "object"},
+    },
+    "additionalProperties": True,
+}
+WORKER_VERIFY_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "taskID": {"type": "string"},
+        "sessionID": {"type": "string"},
+        "state": {"type": "string"},
+        "directory": {"type": "string"},
+        "verification": {"type": "object"},
+        "timed_out": {"type": "boolean"},
+        "retryable": {"type": "boolean"},
+        "next_action": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "evidence": {"type": "object"},
+    },
+    "additionalProperties": True,
+}
+WORKER_CLEANUP_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "taskID": {"type": "string"},
+        "sessionID": {"type": "string"},
+        "action": {"type": "string"},
+        "aborted": {"type": "boolean"},
+        "deleted": {"type": "boolean"},
+        "directory": {"type": "string"},
+        "cleanup_warning": {"type": ["string", "null"]},
+        "state": {"type": "string"},
+        "timed_out": {"type": "boolean"},
+        "retryable": {"type": "boolean"},
+        "next_action": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "evidence": {"type": "object"},
+    },
+    "additionalProperties": True,
+}
+WORKER_CATALOG_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "models": {"type": "array"},
+        "default": {"type": "object"},
+        "total": {"type": "integer"},
+        "recommendations": {"type": "array"},
+        "timed_out": {"type": "boolean"},
+        "retryable": {"type": "boolean"},
+        "next_action": {"type": "string"},
+        "error_code": {"type": ["string", "null"]},
+        "evidence": {"type": "object"},
+    },
+    "additionalProperties": True,
+}
+
+
+def _clamp_worker_wait_timeout(value: Any) -> float:
+    """Clamp a worker_wait timeout to a finite bounded range.
+
+    Args:
+        value: Requested timeout in seconds (None means the default).
+
+    Returns:
+        Bounded timeout in seconds within [MIN, MAX].
+
+    Raises:
+        ValueError: If the value is not a finite number.
+    """
+    import math
+
+    if value is None:
+        return WORKER_WAIT_DEFAULT_TIMEOUT_S
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("timeout_s must be a number of seconds")
+    if not math.isfinite(numeric):
+        raise ValueError("timeout_s must be a finite number of seconds")
+    return max(WORKER_WAIT_MIN_TIMEOUT_S, min(numeric, WORKER_WAIT_MAX_TIMEOUT_S))
+
+
+def _next_action_for_state(state: str, timed_out: bool) -> str:
+    """Return coordinator guidance for a worker state.
+
+    Args:
+        state: Mapped worker state.
+        timed_out: True when a bounded wait expired without a change.
+
+    Returns:
+        Stable next_action string (worker_wait/worker_verify/
+        worker_status/worker_cleanup).
+    """
+    if state == "stale":
+        return "worker_cleanup"
+    if state == "idle":
+        return "worker_verify"
+    if state == "error":
+        return "worker_verify"
+    if state == "unknown":
+        return "worker_status"
+    if timed_out:
+        return "worker_wait"
+    return "worker_wait" if state == "running" else "worker_status"
+
+
+def _retryable_for_state(state: str, timed_out: bool, stale: bool = False) -> bool:
+    """Return whether the coordinator can usefully retry/wait again.
+
+    Args:
+        state: Mapped worker state.
+        timed_out: True when a bounded wait expired without a change.
+        stale: True when the snapshot was classified stale.
+
+    Returns:
+        True for running (including timed-out waits) and error; False
+        for idle, stale, and unknown terminal snapshots.
+    """
+    if stale or state in ("idle", "unknown", "stale"):
+        return False
+    if state in ("running", "error"):
+        return True
+    return bool(timed_out)
+
+
+def _error_code_for_snapshot(state: str, status: Any, message_id: Any) -> str | None:
+    """Return a stable error code for snapshots that need one.
+
+    Only genuinely missing tasks get a code today: unknown state with no
+    raw status and no assistant message means the session is absent from
+    OpenCode. All other states return None (no error).
+
+    Args:
+        state: Mapped worker state.
+        status: Raw status value (may be None).
+        message_id: Assistant message ID or None.
+
+    Returns:
+        "task_not_found" for absent tasks, else None.
+    """
+    if state == "unknown" and status is None and message_id is None:
+        return "task_not_found"
+    return None
+
+
+def _worker_evidence(
+    status: Any, message_id: Any, output_chars: int, total_chars: int
+) -> dict[str, Any]:
+    """Build concise bounded evidence for a worker snapshot.
+
+    Args:
+        status: Raw status value (bounded to a short string).
+        message_id: Assistant message ID or None.
+        output_chars: Bounded output length.
+        total_chars: Full output length.
+
+    Returns:
+        Small dict with no prompt text, paths, or secrets.
+    """
+    raw = status if isinstance(status, str) else (str(status) if status is not None else None)
+    return {
+        "status": _bound_text(raw, 64) if raw is not None else None,
+        "messageID": message_id,
+        "output_chars": int(output_chars or 0),
+        "total_chars": int(total_chars or 0),
+    }
+
 
 _TASK_LOCK: asyncio.Lock | None = None
 _TASK_LOCK_LOOP: Any = None
@@ -669,6 +916,7 @@ WORKER_TOOL_NAMES = frozenset(
     {
         "worker_run",
         "worker_status",
+        "worker_wait",
         "worker_verify",
         "worker_cleanup",
         "worker_catalog",
@@ -688,6 +936,7 @@ ALL_TOOL_NAMES = frozenset(
         "get_diff",
         "worker_run",
         "worker_status",
+        "worker_wait",
         "worker_catalog",
         "exec_run",
         "worker_verify",
@@ -1289,20 +1538,22 @@ def _classify_task_stale(
 
 
 @mcp.tool(
+    output_schema=WORKER_RUN_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
         "openWorldHint": True,
-    }
+    },
 )
 @worker_mcp.tool(
+    output_schema=WORKER_RUN_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": False,
         "destructiveHint": False,
         "idempotentHint": False,
         "openWorldHint": True,
-    }
+    },
 )
 async def worker_run(
     message: str,
@@ -1355,7 +1606,10 @@ async def worker_run(
     Returns:
         Compact dict with taskID (= sessionID), sessionID, state,
         providerID, modelID, directory, title, agent, requestID, and
-        deduplicated flag.
+        deduplicated flag, plus the stable wait-friendly contract
+        (timed_out=False, retryable, next_action, error_code, evidence).
+        Use worker_wait to wait for progress without client polling and
+        worker_status for an immediate snapshot.
     """
     _obs_start = time.perf_counter()
     _obs_request = observability.redact_request_id(requestID)
@@ -1401,6 +1655,16 @@ async def worker_run(
                             "agent": existing.get("agent"),
                             "requestID": normalized_request,
                             "deduplicated": True,
+                            "timed_out": False,
+                            "retryable": True,
+                            "next_action": "worker_wait",
+                            "error_code": None,
+                            "evidence": {
+                                "status": "running",
+                                "messageID": None,
+                                "output_chars": 0,
+                                "total_chars": 0,
+                            },
                         }
                         observability.emit(
                             event=observability.EVENT_WORKER,
@@ -1465,6 +1729,16 @@ async def worker_run(
                 "agent": agent,
                 "requestID": normalized_request,
                 "deduplicated": False,
+                "timed_out": False,
+                "retryable": True,
+                "next_action": "worker_wait",
+                "error_code": None,
+                "evidence": {
+                    "status": "running",
+                    "messageID": None,
+                    "output_chars": 0,
+                    "total_chars": 0,
+                },
             }
             observability.emit(
                 event=observability.EVENT_WORKER,
@@ -1489,21 +1763,136 @@ async def worker_run(
         raise
 
 
+def _resolve_worker_scope(
+    taskID: str, directory: str | None
+) -> tuple[str, str, dict[str, Any] | None]:
+    """Resolve directory scope for worker snapshot/wait tools.
+
+    Explicit directories are authorized strictly; omitted directories are
+    recovered from the saved task record, else the server default. With an
+    explicit directory the registry is read best-effort for staleness
+    metadata only, so a corrupt registry never fails the call.
+
+    Args:
+        taskID: Task ID from worker_run.
+        directory: Working directory override or None.
+
+    Returns:
+        Tuple of (effective_query, effective_dir, stale_record).
+    """
+    saved: dict[str, Any] | None = None
+    if directory is None:
+        saved = _load_task_state().get(taskID)
+    if directory is not None:
+        authorized = _authorize_directory(directory)
+        stale_record: dict[str, Any] | None = None
+        with suppress(Exception):
+            stale_record = _load_task_state().get(taskID)
+            if not isinstance(stale_record, dict):
+                stale_record = None
+        return authorized, authorized, stale_record
+    if saved and saved.get("directory"):
+        saved_dir = saved.get("directory")
+        if not isinstance(saved_dir, str) or not saved_dir.strip():
+            effective = _authorize_optional_directory(None)
+        else:
+            effective = _authorize_directory(saved_dir)
+        return effective, effective, saved if isinstance(saved, dict) else None
+    effective = _authorize_optional_directory(None)
+    return effective, effective, saved if isinstance(saved, dict) else None
+
+
+async def _snapshot_worker(
+    taskID: str,
+    effective_query: str,
+    effective_dir: str,
+    stale_record: dict[str, Any] | None,
+    include_output: bool,
+    cap: int,
+) -> dict[str, Any]:
+    """Collect one immediate worker snapshot without any LLM call.
+
+    Only read-only OpenCode reads are used (GET /session/status plus the
+    latest assistant message). Never creates, prompts, aborts, or deletes.
+
+    Args:
+        taskID: Task ID from worker_run.
+        effective_query: Directory-scoped query path.
+        effective_dir: Directory to report.
+        stale_record: Registry record for stale classification or None.
+        include_output: When false, skip fetching messages.
+        cap: Bounded output cap.
+
+    Returns:
+        Base snapshot dict without the stable wait contract envelope.
+    """
+    client = get_client()
+    statuses = await client.get_session_status(effective_query)
+    raw = statuses.get(taskID) if isinstance(statuses, dict) else None
+    status = raw.get("type") if isinstance(raw, dict) else raw
+    state = _map_worker_state(raw)
+    message_id: str | None = None
+    output: str | None = None
+    output_chars = 0
+    total_chars = 0
+    truncated_chars = 0
+    truncated = False
+    if include_output:
+        latest = await client.get_latest_assistant(taskID, effective_query, max_chars=cap + 1)
+        message_id = latest.get("messageID")
+        if latest.get("has_error"):
+            state = "error"
+        elif raw is None and message_id is not None:
+            state = "idle"
+        total_chars = int(latest.get("total_chars", 0) or 0)
+        text = latest.get("text", "") or ""
+        if total_chars > cap:
+            output = text[:cap]
+            truncated = True
+            truncated_chars = total_chars - cap
+        else:
+            output = text
+        output_chars = len(output) if output is not None else 0
+    has_output = bool(message_id) or total_chars > 0
+    stale, stale_reason = _classify_task_stale(stale_record, state, has_output, include_output)
+    if stale:
+        state = "stale"
+    recovery_hint = WORKER_STALE_RECOVERY_HINT if stale else None
+    return {
+        "taskID": taskID,
+        "sessionID": taskID,
+        "state": state,
+        "status": status,
+        "messageID": message_id,
+        "output": output,
+        "output_chars": output_chars,
+        "total_chars": total_chars,
+        "truncated_chars": truncated_chars,
+        "truncated": truncated,
+        "directory": effective_dir,
+        "stale": stale,
+        "stale_reason": stale_reason,
+        "recovery_hint": recovery_hint,
+    }
+
+
 @mcp.tool(
+    output_schema=WORKER_STATUS_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": False,
-    }
+    },
 )
 @worker_mcp.tool(
+    output_schema=WORKER_STATUS_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": False,
-    }
+    },
 )
 async def worker_status(
     taskID: str,
@@ -1513,12 +1902,14 @@ async def worker_status(
 ) -> dict[str, Any]:
     """Poll a background worker for state and its latest assistant text.
 
-    Pass the directory returned by worker_run when it differs from the
-    configured default: status and messages are directory-scoped. When
-    directory is omitted, the saved task record is used to recover it.
-    A worker that stays running with empty output past TASK_STALE_AFTER_S
-    is classified stale with a bounded reason and a recovery hint;
-    clean it with worker_cleanup action=delete for this taskID only.
+    Immediate snapshot fallback for worker_wait: never blocks, never
+    invokes an LLM call, never requires client sleep polling. Pass the
+    directory returned by worker_run when it differs from the configured
+    default: status and messages are directory-scoped. When directory is
+    omitted, the saved task record is used to recover it. A worker that
+    stays running with empty output past TASK_STALE_AFTER_S is classified
+    stale with a bounded reason and a recovery hint; clean it with
+    worker_cleanup action=delete for this taskID only.
 
     Args:
         taskID: Task ID from worker_run (the session ID).
@@ -1530,14 +1921,15 @@ async def worker_status(
         Compact dict with taskID, sessionID, state
         (running/idle/error/unknown/stale), raw status, messageID, latest
         output only, output_chars, total_chars, truncated_chars, a truncated
-        flag, directory, plus stale, stale_reason, and recovery_hint.
-        Only output text is bounded; directory paths are returned exactly
-        as requested or saved. stale_reason carries elapsed/limit seconds
-        only, never prompts, paths, tokens, or backend text. Never dumps
-        full history. GET /session/status contains active sessions only, so
-        an absent raw status with a non-null assistant messageID and no
-        assistant error infers idle; absent status with no assistant stays
-        unknown.
+        flag, directory, plus stale, stale_reason, and recovery_hint, plus
+        the stable contract (timed_out=False, retryable, next_action,
+        error_code, evidence). Only output text is bounded; directory paths
+        are returned exactly as requested or saved. stale_reason carries
+        elapsed/limit seconds only, never prompts, paths, tokens, or
+        backend text. Never dumps full history. GET /session/status
+        contains active sessions only, so an absent raw status with a
+        non-null assistant messageID and no assistant error infers idle;
+        absent status with no assistant stays unknown.
     """
     _obs_start = time.perf_counter()
     _obs_task = observability.safe_task_id(taskID)
@@ -1548,81 +1940,21 @@ async def worker_status(
         task_id=_obs_task,
     )
     try:
-        client = get_client()
-        saved: dict[str, Any] | None = None
-        if directory is None:
-            saved = _load_task_state().get(taskID)
-        if directory is not None:
-            authorized = _authorize_directory(directory)
-            effective_query = authorized
-            effective_dir = authorized
-            # Best-effort staleness metadata only: explicit directories must
-            # keep working even when the registry is corrupt, so registry
-            # errors here never fail the status call.
-            stale_record: dict[str, Any] | None = None
-            with suppress(Exception):
-                stale_record = _load_task_state().get(taskID)
-                if not isinstance(stale_record, dict):
-                    stale_record = None
-        elif saved and saved.get("directory"):
-            saved_dir = saved.get("directory")
-            if not isinstance(saved_dir, str) or not saved_dir.strip():
-                effective_dir = _authorize_optional_directory(None)
-            else:
-                effective_dir = _authorize_directory(saved_dir)
-            effective_query = effective_dir
-            stale_record = saved if isinstance(saved, dict) else None
-        else:
-            effective_dir = _authorize_optional_directory(None)
-            effective_query = effective_dir
-            stale_record = saved if isinstance(saved, dict) else None
+        effective_query, effective_dir, stale_record = _resolve_worker_scope(taskID, directory)
         cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
-        statuses = await client.get_session_status(effective_query)
-        raw = statuses.get(taskID) if isinstance(statuses, dict) else None
-        status = raw.get("type") if isinstance(raw, dict) else raw
-        state = _map_worker_state(raw)
-        message_id: str | None = None
-        output: str | None = None
-        output_chars = 0
-        total_chars = 0
-        truncated_chars = 0
-        truncated = False
-        if include_output:
-            latest = await client.get_latest_assistant(taskID, effective_query, max_chars=cap + 1)
-            message_id = latest.get("messageID")
-            if latest.get("has_error"):
-                state = "error"
-            elif raw is None and message_id is not None:
-                state = "idle"
-            total_chars = int(latest.get("total_chars", 0) or 0)
-            text = latest.get("text", "") or ""
-            if total_chars > cap:
-                output = text[:cap]
-                truncated = True
-                truncated_chars = total_chars - cap
-            else:
-                output = text
-            output_chars = len(output) if output is not None else 0
-        has_output = bool(message_id) or total_chars > 0
-        stale, stale_reason = _classify_task_stale(stale_record, state, has_output, include_output)
-        if stale:
-            state = "stale"
-        recovery_hint = WORKER_STALE_RECOVERY_HINT if stale else None
+        base = await _snapshot_worker(
+            taskID, effective_query, effective_dir, stale_record, include_output, cap
+        )
+        error_code = _error_code_for_snapshot(base["state"], base["status"], base["messageID"])
         _obs_result = {
-            "taskID": taskID,
-            "sessionID": taskID,
-            "state": state,
-            "status": status,
-            "messageID": message_id,
-            "output": output,
-            "output_chars": output_chars,
-            "total_chars": total_chars,
-            "truncated_chars": truncated_chars,
-            "truncated": truncated,
-            "directory": effective_dir,
-            "stale": stale,
-            "stale_reason": stale_reason,
-            "recovery_hint": recovery_hint,
+            **base,
+            "timed_out": False,
+            "retryable": _retryable_for_state(base["state"], False, base["stale"]),
+            "next_action": _next_action_for_state(base["state"], False),
+            "error_code": error_code,
+            "evidence": _worker_evidence(
+                base["status"], base["messageID"], base["output_chars"], base["total_chars"]
+            ),
         }
         observability.emit(
             event=observability.EVENT_WORKER,
@@ -1637,6 +1969,164 @@ async def worker_status(
         observability.emit(
             event=observability.EVENT_WORKER,
             tool="worker_status",
+            outcome=observability.outcome_for(_obs_exc),
+            duration_ms=observability.duration_ms_since(_obs_start),
+            task_id=_obs_task,
+            error_class=_obs_class,
+            status_code=_obs_status,
+        )
+        raise
+
+
+@mcp.tool(
+    output_schema=WORKER_WAIT_OUTPUT_SCHEMA,
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+@worker_mcp.tool(
+    output_schema=WORKER_WAIT_OUTPUT_SCHEMA,
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def worker_wait(
+    taskID: str,
+    directory: str | None = None,
+    timeout_s: float | None = WORKER_WAIT_DEFAULT_TIMEOUT_S,
+    include_output: bool = True,
+    max_output_chars: int = WORKER_OUTPUT_DEFAULT_CHARS,
+) -> dict[str, Any]:
+    """Wait for a background worker to change state, bounded server-side.
+
+    Coordinator-friendly alternative to client sleep polling: the server
+    polls OpenCode on the caller's behalf and returns as soon as the task
+    state (or assistant output progress) changes, or when the bounded
+    timeout expires. Never waits indefinitely: timeout_s is clamped to a
+    finite [1, 120]s range and the call always returns by the deadline.
+    Never invokes an extra LLM call: only read-only GET /session/status
+    and the latest assistant message are used, never prompt_async. Keep
+    worker_run asynchronous and use worker_status for an immediate
+    snapshot fallback.
+
+    Args:
+        taskID: Task ID from worker_run (the session ID).
+        directory: Working directory override (same scoping as
+            worker_status; omitted recovers the saved record).
+        timeout_s: Max seconds to wait, clamped to a bounded range.
+        include_output: When false, skip fetching messages.
+        max_output_chars: Output cap, clamped to a bounded range.
+
+    Returns:
+        worker_status snapshot plus the stable contract: timed_out
+        (True only when the deadline expired without a change), changed
+        (True when state/output progressed before the deadline),
+        elapsed_s, timeout_s, retryable, next_action, error_code
+        ("task_not_found" when the session is absent), and concise
+        evidence. Missing tasks return immediately with state unknown.
+
+    Raises:
+        ValueError: If taskID is empty or timeout_s is not finite.
+    """
+    _obs_start = time.perf_counter()
+    _obs_task = observability.safe_task_id(taskID)
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_wait",
+        outcome=observability.OUTCOME_STARTED,
+        task_id=_obs_task,
+    )
+    try:
+        if not taskID or not taskID.strip():
+            raise ValueError("taskID must not be empty")
+        bounded_timeout = _clamp_worker_wait_timeout(timeout_s)
+        cap = max(1, min(max_output_chars, WORKER_OUTPUT_MAX_CHARS))
+        effective_query, effective_dir, stale_record = _resolve_worker_scope(taskID, directory)
+        start = time.monotonic()
+        first = await _snapshot_worker(
+            taskID, effective_query, effective_dir, stale_record, include_output, cap
+        )
+        first_state = first["state"]
+        first_message = first["messageID"]
+        first_total = first["total_chars"]
+        first_error = _error_code_for_snapshot(first_state, first["status"], first_message)
+        if first_state != "running" or first_error is not None or first.get("stale"):
+            return {
+                **first,
+                "timed_out": False,
+                "changed": False,
+                "elapsed_s": round(time.monotonic() - start, 3),
+                "timeout_s": bounded_timeout,
+                "retryable": _retryable_for_state(first_state, False, first["stale"]),
+                "next_action": _next_action_for_state(first_state, False),
+                "error_code": first_error,
+                "evidence": _worker_evidence(
+                    first["status"], first_message, first["output_chars"], first_total
+                ),
+            }
+        deadline = start + bounded_timeout
+        latest = first
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(WORKER_WAIT_POLL_S, remaining))
+            current = await _snapshot_worker(
+                taskID, effective_query, effective_dir, stale_record, include_output, cap
+            )
+            if (
+                current["state"] != first_state
+                or current["messageID"] != first_message
+                or current["total_chars"] != first_total
+            ):
+                return {
+                    **current,
+                    "timed_out": False,
+                    "changed": True,
+                    "elapsed_s": round(time.monotonic() - start, 3),
+                    "timeout_s": bounded_timeout,
+                    "retryable": _retryable_for_state(current["state"], False, current["stale"]),
+                    "next_action": _next_action_for_state(current["state"], False),
+                    "error_code": _error_code_for_snapshot(
+                        current["state"], current["status"], current["messageID"]
+                    ),
+                    "evidence": _worker_evidence(
+                        current["status"],
+                        current["messageID"],
+                        current["output_chars"],
+                        current["total_chars"],
+                    ),
+                }
+            latest = current
+        return {
+            **latest,
+            "timed_out": True,
+            "changed": False,
+            "elapsed_s": round(time.monotonic() - start, 3),
+            "timeout_s": bounded_timeout,
+            "retryable": _retryable_for_state(latest["state"], True, latest["stale"]),
+            "next_action": _next_action_for_state(latest["state"], True),
+            "error_code": _error_code_for_snapshot(
+                latest["state"], latest["status"], latest["messageID"]
+            ),
+            "evidence": _worker_evidence(
+                latest["status"],
+                latest["messageID"],
+                latest["output_chars"],
+                latest["total_chars"],
+            ),
+        }
+    except Exception as _obs_exc:
+        _obs_class, _obs_status = observability.classify_error(_obs_exc)
+        observability.emit(
+            event=observability.EVENT_WORKER,
+            tool="worker_wait",
             outcome=observability.outcome_for(_obs_exc),
             duration_ms=observability.duration_ms_since(_obs_start),
             task_id=_obs_task,
@@ -1754,20 +2244,22 @@ def _build_recommendations(
 
 
 @mcp.tool(
+    output_schema=WORKER_CATALOG_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": False,
-    }
+    },
 )
 @worker_mcp.tool(
+    output_schema=WORKER_CATALOG_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": False,
-    }
+    },
 )
 async def worker_catalog(
     query: str | None = None,
@@ -1795,7 +2287,9 @@ async def worker_catalog(
 
     Returns:
         Compact dict with model entries, bridge defaults, total count,
-        and ordered recommendations (free first, paid fallback second).
+        and ordered recommendations (free first, paid fallback second),
+        plus the stable contract (timed_out=False, retryable, next_action,
+        error_code, evidence).
     """
     _obs_start = time.perf_counter()
     observability.emit(
@@ -1873,6 +2367,16 @@ async def worker_catalog(
                 client.default_provider_id,
                 client.default_model_id,
             ),
+            "timed_out": False,
+            "retryable": False,
+            "next_action": "worker_run",
+            "error_code": None,
+            "evidence": {
+                "status": None,
+                "messageID": None,
+                "output_chars": 0,
+                "total_chars": len(models),
+            },
         }
         observability.emit(
             event=observability.EVENT_WORKER,
@@ -1971,20 +2475,22 @@ async def exec_run(
 
 
 @mcp.tool(
+    output_schema=WORKER_VERIFY_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": False,
-    }
+    },
 )
 @worker_mcp.tool(
+    output_schema=WORKER_VERIFY_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": False,
-    }
+    },
 )
 async def worker_verify(
     taskID: str,
@@ -2006,7 +2512,9 @@ async def worker_verify(
         Compact dict with taskID, sessionID, state, status, bounded output
         counts, directory, and a verification bundle (git status --short,
         diff --stat, diff --check exit/output, changed files, latest commit
-        evidence). latest_commit is the directory HEAD for information only
+        evidence), plus the stable contract inherited from worker_status
+        (timed_out, retryable, next_action, error_code, evidence).
+        latest_commit is the directory HEAD for information only
         and is never attributed to the task. Handles missing directories
         and non-git paths cleanly.
 
@@ -2061,20 +2569,22 @@ async def worker_verify(
 
 
 @mcp.tool(
+    output_schema=WORKER_CLEANUP_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": False,
         "destructiveHint": True,
         "idempotentHint": False,
         "openWorldHint": False,
-    }
+    },
 )
 @worker_mcp.tool(
+    output_schema=WORKER_CLEANUP_OUTPUT_SCHEMA,
     annotations={
         "readOnlyHint": False,
         "destructiveHint": True,
         "idempotentHint": False,
         "openWorldHint": False,
-    }
+    },
 )
 async def worker_cleanup(
     taskID: str,
@@ -2098,7 +2608,9 @@ async def worker_cleanup(
 
     Returns:
         Stable compact dict with taskID, sessionID, action, aborted,
-        deleted, directory, and cleanup_warning. aborted is True only when
+        deleted, directory, and cleanup_warning, plus the stable contract
+        (state, timed_out=False, retryable=False, next_action,
+        error_code, evidence). aborted is True only when
         the pre-action abort actually succeeded; when the best-effort abort
         before delete fails, aborted is False and cleanup_warning carries a
         short generic note (no internal error details).
@@ -2146,6 +2658,17 @@ async def worker_cleanup(
                 "deleted": False,
                 "directory": effective_dir,
                 "cleanup_warning": None,
+                "state": "idle",
+                "timed_out": False,
+                "retryable": False,
+                "next_action": "worker_status",
+                "error_code": None,
+                "evidence": {
+                    "status": "aborted",
+                    "messageID": None,
+                    "output_chars": 0,
+                    "total_chars": 0,
+                },
             }
             observability.emit(
                 event=observability.EVENT_WORKER,
@@ -2183,6 +2706,17 @@ async def worker_cleanup(
                             "pre-delete abort failed; session deleted",
                             WORKER_CLEANUP_WARNING_MAX_CHARS,
                         ),
+                        "state": "unknown",
+                        "timed_out": False,
+                        "retryable": False,
+                        "next_action": "worker_status",
+                        "error_code": None,
+                        "evidence": {
+                            "status": "deleted",
+                            "messageID": None,
+                            "output_chars": 0,
+                            "total_chars": 0,
+                        },
                     }
                     observability.emit(
                         event=observability.EVENT_WORKER,
@@ -2211,6 +2745,17 @@ async def worker_cleanup(
                         "pre-delete abort failed; session deleted",
                         WORKER_CLEANUP_WARNING_MAX_CHARS,
                     ),
+                    "state": "unknown",
+                    "timed_out": False,
+                    "retryable": False,
+                    "next_action": "worker_status",
+                    "error_code": None,
+                    "evidence": {
+                        "status": "deleted",
+                        "messageID": None,
+                        "output_chars": 0,
+                        "total_chars": 0,
+                    },
                 }
                 observability.emit(
                     event=observability.EVENT_WORKER,
@@ -2239,6 +2784,17 @@ async def worker_cleanup(
                         "session already gone; record removed",
                         WORKER_CLEANUP_WARNING_MAX_CHARS,
                     ),
+                    "state": "unknown",
+                    "timed_out": False,
+                    "retryable": False,
+                    "next_action": "worker_status",
+                    "error_code": None,
+                    "evidence": {
+                        "status": "deleted",
+                        "messageID": None,
+                        "output_chars": 0,
+                        "total_chars": 0,
+                    },
                 }
                 observability.emit(
                     event=observability.EVENT_WORKER,
@@ -2266,6 +2822,17 @@ async def worker_cleanup(
                         "session already gone; record removed",
                         WORKER_CLEANUP_WARNING_MAX_CHARS,
                     ),
+                    "state": "unknown",
+                    "timed_out": False,
+                    "retryable": False,
+                    "next_action": "worker_status",
+                    "error_code": None,
+                    "evidence": {
+                        "status": "deleted",
+                        "messageID": None,
+                        "output_chars": 0,
+                        "total_chars": 0,
+                    },
                 }
                 observability.emit(
                     event=observability.EVENT_WORKER,
@@ -2285,6 +2852,17 @@ async def worker_cleanup(
                 "deleted": True,
                 "directory": effective_dir,
                 "cleanup_warning": None,
+                "state": "unknown",
+                "timed_out": False,
+                "retryable": False,
+                "next_action": "worker_status",
+                "error_code": None,
+                "evidence": {
+                    "status": "deleted",
+                    "messageID": None,
+                    "output_chars": 0,
+                    "total_chars": 0,
+                },
             }
             observability.emit(
                 event=observability.EVENT_WORKER,
@@ -2715,7 +3293,7 @@ def _server_card_version() -> str:
 async def _server_card_payload() -> dict[str, Any]:
     """Build the static Smithery server-card payload from worker tools.
 
-    Lists exactly the five worker_* tools served on /worker-mcp with
+    Lists exactly the six worker_* tools served on /worker-mcp with
     their live descriptions and JSON input schemas, so the card cannot
     drift from the real catalog. Never includes exec_run, tokens,
     credentials, or OAuth claims: auth is a static Bearer token and

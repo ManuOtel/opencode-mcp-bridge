@@ -216,22 +216,22 @@ def test_health_minimal_unauthenticated(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_worker_tools_list_exact_five_without_exec(monkeypatch: pytest.MonkeyPatch) -> None:
-    """worker tools/list exposes exactly the five worker tools, never exec_run."""
+    """worker tools/list exposes exactly the six worker tools, never exec_run."""
     with _make_client(monkeypatch) as client:
         names = _tool_names(
             client.post("/worker-mcp", json=_tools_list_body(), headers=_headers(PRIMARY))
         )
     assert names == sorted(server.WORKER_TOOL_NAMES)
-    assert len(names) == 5
+    assert len(names) == 6
     assert "exec_run" not in names
 
 
 def test_full_tools_list_backward_compatible(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Full /mcp tools/list keeps all 16 tools including legacy and exec_run."""
+    """Full /mcp tools/list keeps all 17 tools including legacy and exec_run."""
     with _make_client(monkeypatch) as client:
         names = _tool_names(client.post("/mcp", json=_tools_list_body(), headers=_headers(PRIMARY)))
     assert names == sorted(server.ALL_TOOL_NAMES)
-    assert len(names) == 16
+    assert len(names) == 17
     assert LEGACY_NAMES <= set(names)
     assert set(server.WORKER_TOOL_NAMES) <= set(names)
     assert "exec_run" in names
