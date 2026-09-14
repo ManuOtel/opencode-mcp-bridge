@@ -11,12 +11,20 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
+# Least privilege: jobs only check out code and run local checks.
+# Matches release.yml. No new grants.
+permissions:
+  contents: read
+
 jobs:
   # PR-light lane: fast signal on one current Python (3.14 matches
   # Dockerfile and release.yml). Stays on GitHub-hosted runners.
   validate-pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # Full suite runs in ~15s locally; 20 min caps a hung runner at
+    # 1/18th of the 360 min default without risking flakes.
+    timeout-minutes: 20
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -51,6 +59,7 @@ jobs:
   validate-main:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
@@ -91,6 +100,7 @@ jobs:
   docker:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [validate-main]
     steps:
       # actions/checkout v7.0.1
