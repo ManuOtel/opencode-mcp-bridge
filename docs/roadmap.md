@@ -73,8 +73,9 @@ Implementation slices:
    wrong token returns 401; oversize declared and streamed bodies
    return 413; `GET /health` stays open with minimal payload.
 3. Add live interop scripts: `scripts/smoke.sh` plus Inspector steps
-   for `/worker-mcp` (five tools listed) and `/mcp` (16 tools listed,
-   `exec_run` fails closed by default).
+   for `/worker-mcp` (six tools listed; five on v0.2.x bridges) and
+   `/mcp` (17 tools listed, 16 on v0.2.x bridges; `exec_run` fails
+   closed by default).
 4. Record tested client versions in `docs/client-setup.md`. Remove or
    fix any client row without a passing path.
 

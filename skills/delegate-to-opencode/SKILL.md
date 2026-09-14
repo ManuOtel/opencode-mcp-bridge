@@ -1,6 +1,6 @@
 ---
 name: delegate-to-opencode
-description: Scope and launch an async OpenCode worker task with free-model defaults, acceptance criteria, and polling.
+description: Scope and launch an async OpenCode worker task with free-model defaults, acceptance criteria, and bounded server-side waiting.
 ---
 
 # Delegate to OpenCode
