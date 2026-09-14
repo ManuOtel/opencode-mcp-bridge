@@ -54,7 +54,7 @@ export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
 Rules for every URL in this package:
 
 - `https://<your-domain>/worker-mcp` is the safe default. It exposes exactly
-  five worker tools and never includes `exec_run`.
+  six worker tools and never includes `exec_run`.
 - `https://YOUR-BRIDGE-HOST/worker-mcp` (as shipped in `.mcp.json`) is a
   placeholder. It fails loudly by design. Always register your own URL.
 - There is no shared production server in this package. Self-host for
@@ -116,9 +116,14 @@ shttp_servers = [
 ]
 ```
 
-Check status inside a conversation with `/mcp`. The agent then sees the five
-worker tools: `worker_catalog`, `worker_run`, `worker_status`,
+Check status inside a conversation with `/mcp`. The agent then sees the six
+worker tools: `worker_catalog`, `worker_run`, `worker_wait`, `worker_status`,
 `worker_verify`, `worker_cleanup`.
+
+Prefer bounded `worker_wait` for progress (`timeout_s` default 30 seconds,
+server clamp 1-120 seconds). It returns on state or message change or at the
+deadline with `timed_out=true` and `next_action="worker_wait"` to call again.
+No client sleep loops. Use `worker_status` for an immediate snapshot only.
 
 ## Coordinator workflow
 
@@ -133,8 +138,10 @@ The bundled `coordinate-opencode-worker` skill enforces this order:
 2. Launch with `worker_run` (`message`, `directory`, `title`). Save `taskID`
    and `directory`. Use a fresh branch plus a dedicated worktree per worker;
    concurrent workers never share a checkout.
-3. Poll `worker_status` with the same `taskID` and `directory` until `idle`.
-   States: `running` (wait), `idle` (verify), `error`/`unknown` (recover).
+3. Wait with bounded `worker_wait` (same `taskID` and `directory`) until
+   `idle`. Use `worker_status` for an immediate snapshot only.
+   States: `running` (wait again), `idle` (verify), `error`/`unknown`
+   (recover).
 4. Verify with `worker_verify`, then inspect the exact diff and run tests and
    lint with the host's own tools. Never trust a worker summary alone.
 5. Integrate sequentially (rebase, one logical commit, rerun checks,

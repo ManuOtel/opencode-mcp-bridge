@@ -18,11 +18,16 @@ do not respond, stop and tell the boss the server side needs attention
 instead of retrying blindly.
 
 Default transport is the safe `/worker-mcp` endpoint on your own bridge
-deployment (`https://YOUR-BRIDGE-HOST/worker-mcp`). It exposes exactly five
+deployment (`https://YOUR-BRIDGE-HOST/worker-mcp`). It exposes exactly six
 worker tools and never includes `exec_run`:
 
-- `worker_catalog`, `worker_run`, `worker_status`, `worker_verify`,
-  `worker_cleanup`
+- `worker_catalog`, `worker_run`, `worker_wait`, `worker_status`,
+  `worker_verify`, `worker_cleanup`
+
+Prefer bounded `worker_wait` (`timeout_s` default 30 seconds, server clamp
+1-120 seconds) for progress. It returns on state or message change or at the
+deadline with `timed_out=true` and `next_action="worker_wait"` to call again.
+No client sleep loops. Use `worker_status` for an immediate snapshot only.
 
 ## 1. Scope the task
 
@@ -53,10 +58,12 @@ worker tools and never includes `exec_run`:
 
 ## 3. Poll and recover
 
-- Poll `worker_status` with backoff. States: `running` (keep waiting),
+- Prefer bounded `worker_wait` with backoff. States: `running` (wait again),
   `idle` (verify), `error`/`unknown` (recover, do not report success).
+  Use `worker_status` for an immediate snapshot only.
 - Keep `include_output` true and the default cap unless output is huge.
-  `worker_status` returns latest assistant text only, never full history.
+  `worker_status`/`worker_wait` return latest assistant text only,
+  never full history.
 - `unknown` usually means wrong `directory` or a gone session. Re-poll with
   the exact `directory` returned by `worker_run` before anything else.
 - `error` means the latest assistant message carries a provider error. Read
