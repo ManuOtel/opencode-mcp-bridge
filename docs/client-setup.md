@@ -51,7 +51,8 @@ export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
 ```
 
 Use `/worker-mcp` for the compact worker endpoint (recommended:
-six tools with `worker_wait`; five on older v0.2.x bridges).
+eight tools on this bridge; six with `worker_wait` on v0.3.0 bridges;
+five on older v0.2.x bridges).
 Use `/mcp` only for legacy full-catalog clients (section 4).
 
 ## 1. Token setup (never print or store the token)
@@ -127,13 +128,14 @@ Use `--name <name>` via the helper to register under a different server name.
 ## 4. Which URL
 
 - New worker clients: `https://<your-domain>/worker-mcp`
-  (the `worker_*` tools only, compact context: six with `worker_wait`;
-  five on older v0.2.x bridges). This is the
+  (the `worker_*` tools only, compact context: eight on this bridge;
+  six with `worker_wait` on v0.3.0 bridges; five on older v0.2.x
+  bridges). This is the
   recommended endpoint: it never exposes `exec_run`, so a leaked token
   cannot become a direct shell.
 - Existing legacy users keep `/mcp`
-  (`https://<your-domain>/mcp`, full catalog: 17 with `worker_wait`;
-  16 on older v0.2.x bridges). Nothing breaks:
+  (`https://<your-domain>/mcp`, full catalog: 19 on this bridge;
+  17 with `worker_wait` on v0.3.0 bridges; 16 on older v0.2.x bridges). Nothing breaks:
   `exec_run` stays listed but fails closed unless the bridge operator sets
   `ENABLE_EXEC_RUN=true` in the deployment env file.
 - Both paths share the same Bearer token. `/health` stays open.
@@ -201,12 +203,12 @@ The repository is the source of truth for the Codex plugin. The root plugin
 is exposed through the repo-scoped marketplace
 `.agents/plugins/marketplace.json`, which points at the repository root via a
 Git-backed source (`source=url`,
-`https://github.com/ManuOtel/opencode-mcp-bridge.git`, `ref=v0.3.0`). No
-restructuring or plugin duplication was needed. The `v0.3.0` ref is the
+`https://github.com/ManuOtel/opencode-mcp-bridge.git`, `ref=v0.4.0`). No
+restructuring or plugin duplication was needed. The `v0.4.0` ref is the
 stable release tag; it exists only after the maintainer creates it.
 
 ```bash
-codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.3.0
+codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.4.0
 ```
 
 Then install the `opencode-worker` plugin from that marketplace (Plugins
@@ -229,9 +231,9 @@ plugin `opencode-worker` (manifest
 `plugins/claude-code/skills/`) is exposed through the repo-root Claude
 marketplace `.claude-plugin/marketplace.json`, which lists the nested plugin
 via the relative source `./plugins/claude-code` (owner `ManuOtel`,
-version `0.3.0`). The Claude marketplace command installs from the
+version `0.4.0`). The Claude marketplace command installs from the
 checked-out Git revision; the stable release is identified by Git tag
-`v0.3.0` once the maintainer creates it.
+`v0.4.0` once the maintainer creates it.
 
 ```bash
 export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
@@ -261,8 +263,9 @@ request time via `${OPENCODE_MCP_URL}` and
 before install, otherwise the transport has no server to reach.
 
 The bundled transport serves the compact worker endpoint
-(`https://<your-domain>/worker-mcp`, the `worker_*` tools only: six with
-`worker_wait`; five on older v0.2.x bridges) so a leaked token cannot become a direct shell. The plugin
+(`https://<your-domain>/worker-mcp`, the `worker_*` tools only: eight on
+this bridge; six with `worker_wait` on v0.3.0 bridges; five on older
+v0.2.x bridges) so a leaked token cannot become a direct shell. The plugin
 cannot guarantee the self-hosted bridge or OpenCode server is reachable;
 if the tools do not respond, check the server side.
 

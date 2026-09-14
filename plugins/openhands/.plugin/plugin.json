@@ -9,7 +9,7 @@
   "homepage": "https://github.com/ManuOtel/opencode-mcp-bridge",
   "repository": "https://github.com/ManuOtel/opencode-mcp-bridge",
   "license": "PolyForm-Noncommercial-1.0.0",
-  "keywords": ["opencode", "mcp", "workers", "claude-code", "async"],
+  "keywords": ["opencode", "mcp", "workers", "openhands", "async"],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json"
 }

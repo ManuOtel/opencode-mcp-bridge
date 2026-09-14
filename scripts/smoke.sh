@@ -19,7 +19,7 @@ Env (both required, no defaults):
   OPENCODE_MCP_BEARER_TOKEN   bearer token (never passed as an argument)
 
 Checks: GET /health is 200; unauthenticated POST to MCP_URL is 401;
-authenticated tools/list succeeds with exactly the six worker_* tools
+authenticated tools/list succeeds with exactly the eight worker_* tools
 and without exec_run. Response parsing is size-bounded and summarized.
 USAGE
 }
@@ -88,7 +88,7 @@ UNAUTH_CODE=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 -X POST "$MC
 echo "unauth_status=$UNAUTH_CODE"
 [ "$UNAUTH_CODE" = "401" ] || fail "expected 401 on unauthenticated POST, got $UNAUTH_CODE"
 
-echo "== POST tools/list with token (expect 200 and six worker tools)"
+echo "== POST tools/list with token (expect 200 and eight worker tools)"
 MAX_RESPONSE_BYTES=512000
 READ_LIMIT=$((MAX_RESPONSE_BYTES + 1))
 TMP_DIR=$(mktemp -d)
@@ -137,9 +137,9 @@ sort -u "$NAMES" -o "$NAMES"
 COUNT=$(grep -c . "$NAMES" || true)
 COUNT=$(printf '%s' "$COUNT" | tr -d ' ')
 echo "tool_count=$COUNT"
-[ "$COUNT" = "6" ] || fail "expected exactly 6 worker tools, got $COUNT"
+[ "$COUNT" = "8" ] || fail "expected exactly 8 worker tools, got $COUNT"
 
-for want in worker_catalog worker_cleanup worker_run worker_status worker_verify worker_wait; do
+for want in worker_catalog worker_cleanup worker_decide worker_resume worker_run worker_status worker_verify worker_wait; do
     grep -qx "$want" "$NAMES" || fail "missing expected tool: $want"
 done
 if grep -qx 'exec_run' "$NAMES"; then

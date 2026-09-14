@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-14
+
+### Added
+
+- Opt-in live conformance gate (`scripts/live_conformance.sh`,
+  `tests/test_live_conformance.py`,
+  `tests/test_live_conformance_gate.py`): runs only when the operator
+  explicitly opts in with a protected bearer token passed via
+  environment/header files. Never prints, persists, or logs the token.
+  Not run as part of the default offline release gate.
+- Approval/resume states with bounded `worker_wait`: `worker_decide`
+  and `worker_resume` join the worker surface; `worker_wait` stays
+  bounded (default 30, clamped 1-120) with `timed_out` and
+  `next_action` contracts. Existing task keys are unchanged.
+- OpenHands native package (`plugins/openhands/`, `opencode-worker`
+  0.4.0): `.plugin/plugin.json`, safe `/worker-mcp` `.mcp.json` with
+  placeholder host only, `coordinate-opencode-worker` skill, and
+  self-serve README. No shared-server URL or secret in the package.
+  Structural tests only; no OpenHands runtime run claimed.
+- Compatibility and adoption docs plus the eight-tool safe endpoint:
+  `docs/compatibility.md`, adoption proof (`tests/test_adoption_proof.py`),
+  and harness matrix docs. `/worker-mcp` serves exactly eight worker
+  tools and never `exec_run`; `/mcp` serves 19 with `exec_run`
+  fail-closed unless explicitly enabled.
+- Published plugin versions: Codex `opencode-worker` 0.4.0
+  (`.codex-plugin/plugin.json`, marketplace ref `v0.4.0`), Claude
+  `opencode-worker` 0.4.0
+  (`plugins/claude-code/.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json`), and OpenHands `opencode-worker`
+  0.4.0 (`plugins/openhands/.plugin/plugin.json`). Bridge and registry
+  metadata (`pyproject.toml`, `server.json`) track 0.4.0.
+
+### Security
+
+- Bearer-only auth with no OAuth claims; RFC 9728 metadata and
+  Smithery server-card stay unauthenticated without disclosing tokens.
+- `exec_run` remains absent from `/worker-mcp` and fail-closed on
+  `/mcp` unless `ENABLE_EXEC_RUN=true`.
+- No live registry or deployment proof claimed in this entry.
+
 ## [0.3.0] - 2026-09-14
 
 ### Added

@@ -17,6 +17,8 @@ WORKER_TOOLS = (
     "worker_catalog",
     "worker_verify",
     "worker_cleanup",
+    "worker_decide",
+    "worker_resume",
 )
 
 

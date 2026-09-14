@@ -7,6 +7,12 @@ It advertises the optional community demo endpoint operated by ManuOtel
 does not grant access and it contains no token. Users must supply their
 own token. Self-host for production.
 
+Status in this increment: metadata only, not submitted and not
+approved. Publication still needs a human owner login (checklist item
+6); this change claims no listing, no approval, no OAuth, no hosting,
+and no user credentials. The compatibility and first-call proof lives
+in [compatibility.md](compatibility.md).
+
 The remote URL is `https://opencode-mcp.manuotel.com/worker-mcp`. Never
 commit a private endpoint, bearer token, or credential. The demo endpoint
 requires its own token; production users must self-host with their own
@@ -51,8 +57,9 @@ release is ready to publish.
 - Endpoint checks against your own deployment only: `GET /health` is
   open; `POST /worker-mcp` and `POST /mcp` without a token return
   401; the advertised remote is HTTPS with no credentials in the URL.
-- Advertise `/worker-mcp` (worker tools only, no shell: six with
-  `worker_wait`; five on older v0.2.x bridges). Mention
+- Advertise `/worker-mcp` (worker tools only, no shell: eight on this
+  bridge; six with `worker_wait` on v0.3.0 bridges; five on older
+  v0.2.x bridges). Mention
   `/mcp` only for legacy clients that need the full catalog.
 
 ## Glama

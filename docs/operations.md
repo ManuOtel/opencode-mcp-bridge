@@ -105,9 +105,9 @@ origin stays bound to loopback; TLS terminates upstream.
 Run unauthenticated checks first, then authenticated Streamable HTTP
 checks. `scripts/smoke.sh` checks the deployed worker endpoint only
 (`GET /health` without a token, unauthenticated `POST` is `401`,
-authenticated `tools/list` returns exactly the six `worker_*`
-tools with no `exec_run` (five on older v0.2.x bridges without
-`worker_wait`):
+authenticated `tools/list` returns exactly the eight `worker_*`
+tools with no `exec_run` (six on v0.3.0 bridges without approval
+tools; five on older v0.2.x bridges without `worker_wait`):
 
 ```bash
 export MCP_URL="https://<your-domain>/worker-mcp"
@@ -165,8 +165,9 @@ for url in "https://<your-domain>/mcp" "https://<your-domain>/worker-mcp"; do
 done
 ```
 
-Expect 17 tools on `/mcp` and 6 tools on `/worker-mcp` on v0.3.0
-code (16 and 5 on older v0.2.x bridges without `worker_wait`).
+Expect 19 tools on `/mcp` and 8 tools on `/worker-mcp` on this
+code (17 and 6 on v0.3.0 bridges without approval tools; 16 and 5
+on older v0.2.x bridges without `worker_wait`).
 Then call `worker_catalog` over `/worker-mcp` (defaults: free plus
 connected only) and confirm the configured default model is listed
 first before routing work.
@@ -174,6 +175,64 @@ first before routing work.
 Post-deploy: repeat health, both 401 checks, both `initialize` calls,
 both `tools/list` counts, and one `worker_catalog` call. Any mismatch
 is a failed deploy; roll back per section 5.
+
+## 3b. Live conformance gate (opt-in, one disposable run)
+
+`scripts/smoke.sh` proves transport only.
+`scripts/live_conformance.sh` plus `tests/test_live_conformance.py`
+prove endpoint conformance against a live bridge with one disposable
+free-worker run (run, duplicate `requestID`, status, bounded
+`worker_wait`, verify, cleanup) plus error paths. Normal `pytest`
+stays network-free: the live module skips cleanly unless explicit
+live opt-in env vars are set. Generic `MCP_URL`/`MCP_BEARER_TOKEN`
+values never enable live tests. The gate never prints bearer tokens:
+auth headers travel in a `0600` temp file (never in the process list)
+and failure output is token-redacted and bounded.
+
+Local endpoint first:
+
+```bash
+export OPENCODE_MCP_LIVE_ENABLE="1"
+export OPENCODE_MCP_LIVE_WORKER_URL="http://127.0.0.1:8087/worker-mcp"
+export OPENCODE_MCP_LIVE_BEARER_TOKEN="<paste-token-here>"
+./scripts/live_conformance.sh
+```
+
+Deployed endpoint (same gate, explicit URL only):
+
+```bash
+export OPENCODE_MCP_LIVE_ENABLE="1"
+export OPENCODE_MCP_LIVE_WORKER_URL="https://<your-domain>/worker-mcp"
+export OPENCODE_MCP_LIVE_BEARER_TOKEN="<paste-token-here>"
+./scripts/live_conformance.sh
+```
+
+Optional env: `OPENCODE_MCP_LIVE_FULL_URL` (default: sibling `/mcp`
+derived from the worker URL), `OPENCODE_MCP_LIVE_HEALTH_URL`
+(default: sibling `/health` derived from the worker URL root;
+override for nonstandard deployments), `OPENCODE_MCP_LIVE_DIRECTORY`
+(server-side directory fallback for the disposable run; default:
+bridge default; cleanup prefers the server-returned canonical task
+directory), `OPENCODE_MCP_LIVE_WAIT_S` (wait timeout, default 10).
+Direct pytest without the gate:
+
+```bash
+export OPENCODE_MCP_LIVE_ENABLE="1"
+export OPENCODE_MCP_LIVE_WORKER_URL="http://127.0.0.1:8087/worker-mcp"
+export OPENCODE_MCP_LIVE_BEARER_TOKEN="<paste-token-here>"
+uv run pytest tests/test_live_conformance.py -v
+```
+
+Health contract: unauthenticated `GET` on the health URL expects
+`200` with no token. The default health URL is sibling `/health`
+under the worker URL root; set `OPENCODE_MCP_LIVE_HEALTH_URL`
+explicitly when the bridge is mounted elsewhere.
+
+The gate reports `endpoint`, `health_url`, `revision`
+(`git rev-parse --short HEAD`), worker `tool_count` (expect 8, no
+`exec_run`), `full_tool_count` (wider catalog with `exec_run`,
+worker/full stay separate), `test_result` (`PASS`/`FAIL`), and
+`test_time_s`. Any `FAIL` is a failed gate; roll back per section 5.
 
 ## 4. Safe bearer rotation (primary plus secondary)
 
@@ -281,11 +340,14 @@ non-root `opencode-mcp` user), container-scoped shell under Docker (as
 the non-root bridge user). Enable it only where a shell is intended;
 prefer session and worker tools for code edits.
 
-`/worker-mcp` never exposes `exec_run`. It serves exactly the five
-worker tools (`worker_catalog`, `worker_run`, `worker_status`,
-`worker_verify`, `worker_cleanup`), so a leaked worker token cannot
-become a direct shell through this endpoint. Use `/worker-mcp` for
-worker clients; reserve `/mcp` for legacy full-catalog use.
+`/worker-mcp` never exposes `exec_run`. It serves exactly the eight
+worker tools (`worker_catalog`, `worker_run`, `worker_wait`,
+`worker_status`, `worker_verify`, `worker_cleanup`, `worker_decide`,
+`worker_resume`) (six on v0.3.0 bridges without approval tools; five
+on older v0.2.x bridges without `worker_wait`), so a leaked worker
+token cannot become a direct shell through this endpoint. Use
+`/worker-mcp` for worker clients; reserve `/mcp` for legacy
+full-catalog use.
 
 Both endpoints share the same Bearer token and rotation procedure.
 `/health` stays open for reverse-proxy checks.
