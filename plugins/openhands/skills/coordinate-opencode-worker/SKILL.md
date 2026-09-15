@@ -58,9 +58,18 @@ No client sleep loops. Use `worker_status` for an immediate snapshot only.
 
 ## 3. Poll and recover
 
-- Prefer bounded `worker_wait` with backoff. States: `running` (wait again),
+- Prefer bounded `worker_wait` for progress. States: `running` (wait again),
   `idle` (verify), `error`/`unknown` (recover, do not report success).
-  Use `worker_status` for an immediate snapshot only.
+  Use `worker_status` for an immediate snapshot only. At the deadline call
+  `worker_wait` again; no client sleep loops.
+- Read the stable result fields (`taskID`, `state`, `retryable`,
+  `next_action`, `error_code`, `evidence`) and follow `next_action`.
+- Approval-gated runs only: `worker_run` may return
+  `state="approval_required"` instead of starting work. Then `worker_decide`
+  approves without starting anything and `worker_resume` starts the same
+  task exactly once (same `message`, `directory`, and approval token).
+  Nothing touches OpenCode before the resume; duplicates and mismatches
+  fail safely with no second session.
 - Keep `include_output` true and the default cap unless output is huge.
   `worker_status`/`worker_wait` return latest assistant text only,
   never full history.
@@ -72,6 +81,7 @@ No client sleep loops. Use `worker_status` for an immediate snapshot only.
   the same task; duplicates cause duplicate side effects.
 - Abort a live stuck session with `worker_cleanup(action=abort)`; delete
   with `worker_cleanup(action=delete)` only when the task is abandoned.
+  Cleanup is task-scoped: only the given `taskID` is ever touched.
   Cleanup deletes session data and cannot be undone.
 
 ## 4. Verify before accepting

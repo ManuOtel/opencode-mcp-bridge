@@ -13,6 +13,13 @@ self-hosted bridge or the OpenCode server behind it is up. If the MCP tools
 do not respond, stop and tell the boss the server side needs attention
 instead of retrying blindly.
 
+Default transport is the safe `/worker-mcp` endpoint (set `OPENCODE_MCP_URL`
+to `https://<your-domain>/worker-mcp`). It exposes exactly eight worker
+tools and never includes `exec_run`:
+
+- `worker_catalog`, `worker_run`, `worker_wait`, `worker_status`,
+  `worker_verify`, `worker_cleanup`, `worker_decide`, `worker_resume`
+
 ## 1. Scope the task
 
 - State: goal, repo path, branch/worktree, files in scope, files off limits.
@@ -51,6 +58,14 @@ instead of retrying blindly.
   wait, after an error, or when you need one quick look. States:
   `running` (wait again), `idle` (verify), `error`/`unknown`
   (recover, do not report success).
+- Read the stable result fields (`taskID`, `state`, `retryable`,
+  `next_action`, `error_code`, `evidence`) and follow `next_action`.
+- Approval-gated runs only: `worker_run` may return
+  `state="approval_required"` instead of starting work. Then `worker_decide`
+  approves without starting anything and `worker_resume` starts the same
+  task exactly once (same `message`, `directory`, and approval token).
+  Nothing touches OpenCode before the resume; duplicates and mismatches
+  fail safely with no second session.
 - Keep `include_output` true and the default cap unless output is huge.
   `worker_wait`/`worker_status` return latest assistant text only,
   never full history.
@@ -63,6 +78,7 @@ instead of retrying blindly.
   the same task; duplicates cause duplicate side effects.
 - Abort a live stuck session with `worker_cleanup(action=abort)`; delete
   with `worker_cleanup(action=delete)` only when the task is abandoned.
+  Cleanup is task-scoped: only the given `taskID` is ever touched.
   Cleanup deletes session data and cannot be undone.
 
 ## 4. Verify before accepting

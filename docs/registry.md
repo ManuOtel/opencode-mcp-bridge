@@ -30,8 +30,11 @@ must never be used to distribute access credentials.
 
 ## Publication checklist
 
-1. Choose the release version and update `pyproject.toml`, both plugin
-   manifests, the Claude marketplace entry, `server.json`, and `CHANGELOG.md`.
+1. Choose the release version and update `pyproject.toml`, all three plugin
+   manifests (`.codex-plugin/plugin.json`,
+   `plugins/claude-code/.claude-plugin/plugin.json`,
+   `plugins/openhands/.plugin/plugin.json`), the Claude marketplace entry,
+   `server.json`, and `CHANGELOG.md`.
 2. Confirm the advertised remote is
    `https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp` only).
    Confirm that it is HTTPS, owned by the publisher, and does not contain
@@ -49,8 +52,11 @@ release is ready to publish.
 
 ## Maintainer checklist
 
-- Bump together: `pyproject.toml`, both plugin manifests, the Claude
-  marketplace entry, `server.json` version, and `CHANGELOG.md`.
+- Bump together: `pyproject.toml`, all three plugin manifests
+  (`.codex-plugin/plugin.json`,
+  `plugins/claude-code/.claude-plugin/plugin.json`,
+  `plugins/openhands/.plugin/plugin.json`), the Claude marketplace entry,
+  `server.json` version, and `CHANGELOG.md`.
 - Validate metadata: `python3 -m json.tool server.json`,
   `python3 -m json.tool glama.json`, plus the schema checks in
   `AGENTS.md` (never commit tokens or private endpoints).

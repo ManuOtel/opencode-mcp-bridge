@@ -4,6 +4,54 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-15
+
+### Fixed
+
+- Version coherence only (no runtime behavior change): `pyproject.toml`,
+  `server.json`, Codex (`.codex-plugin/plugin.json`), Claude
+  (`plugins/claude-code/.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json`), and OpenHands
+  (`plugins/openhands/.plugin/plugin.json`) manifests, the Codex
+  marketplace `ref` (`.agents/plugins/marketplace.json` now `v0.4.4`),
+  and `SERVER_CARD_FALLBACK_VERSION` all track `0.4.4`. Docs
+  (`README.md`, `docs/client-setup.md`) and marketplace test pins now
+  reference `v0.4.4`, and `tests/test_release_coherence.py` guards the
+  full version set.
+
+### Changed
+
+- Skill parity across all three coordinators with the v0.4.3 worker
+  contract (no new tools): the Claude and OpenHands
+  `coordinate-opencode-worker` skills plus `delegate-to-opencode` and
+  `recover-opencode-task` now teach the safe `/worker-mcp` eight-tool
+  boundary (never `exec_run`), the bounded `worker_wait` long-poll
+  (`timeout_s` default 30, clamped 1-120), the stable contract fields
+  (`state`, `retryable`, `next_action`, `error_code`, `evidence`), the
+  approval gate (`approval_required` needs `worker_decide`, `approved`
+  needs exact-once `worker_resume`, rejected/expired needs a fresh
+  `worker_run`, nothing touches OpenCode before resume), and
+  task-scoped cleanup (only the given `taskID` is ever touched).
+- Release-handoff and doc corrections: `CONTRIBUTING.md` and
+  `docs/registry.md` bump checklists name all three plugin manifests;
+  `README.md` Pi/Hermes allowlists name all eight worker tools;
+  the OpenHands CLI example uses `<paste-token-here>` instead of a
+  shell-expanded token; `docs/compatibility.md` documents the
+  binary-free clean-env proof. Adoption-proof tests now guard the
+  README allowlists, the OpenHands placeholder, and the Claude skill
+  contract surface.
+- Test portability only (no contract change): directory assertions
+  compare canonical realpaths (`os.path.realpath`) so macOS `/tmp`
+  symlinks pass, and the isolated task-state fixture admits the
+  canonical `tmp_path` in `ALLOWED_DIRECTORIES`.
+
+### Security
+
+- No live verification or registry approval claimed in this entry:
+  registry status stays metadata-only (not submitted, not approved),
+  OpenHands coverage stays structural (no OpenHands runtime run), and
+  the live conformance gate stays opt-in and network-free by default.
+
 ## [0.4.3] - 2026-09-14
 
 ### Fixed

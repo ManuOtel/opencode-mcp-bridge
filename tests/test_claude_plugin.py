@@ -71,14 +71,26 @@ def test_claude_skill_frontmatter_and_behavior() -> None:
     flat = " ".join(text.split())
     for phrase in (
         "muse-spark-1.3-contributor-free",
+        "opencode-go/muse-spark-1.3-contributor",
         "worktree",
+        "worker_catalog",
+        "worker_run",
+        "worker_wait",
         "worker_status",
         "worker_verify",
         "worker_cleanup",
+        "worker_decide",
+        "worker_resume",
+        "approval_required",
+        "task-scoped",
         "Never",
     ):
         assert phrase in text, phrase
     assert "sequentially" in flat or "one at a time" in flat
+    assert "/worker-mcp" in text
+    assert "exec_run" in text
+    assert "eight worker tools" in flat
+    assert "1-120" in text
 
 
 def test_claude_marketplace_lists_nested_plugin() -> None:

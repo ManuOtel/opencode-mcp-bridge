@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -86,7 +87,7 @@ def test_worker_verify_git_bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert result["output"] == "done"
     bundle = result["verification"]
     assert bundle["ok"] is True
-    assert bundle["directory"] == str(repo)
+    assert bundle["directory"] == os.path.realpath(repo)
     assert "a.txt" in bundle["status_short"]
     assert isinstance(bundle["diff_stat"], str)
     assert bundle["diff_check"]["exit_code"] == 0
@@ -140,7 +141,7 @@ def test_worker_cleanup_abort_and_delete(monkeypatch: pytest.MonkeyPatch) -> Non
         "action": "abort",
         "aborted": True,
         "deleted": False,
-        "directory": "/tmp/w",
+        "directory": os.path.realpath("/tmp/w"),
         "cleanup_warning": None,
     }.items():
         assert abort[key] == expected
@@ -154,8 +155,11 @@ def test_worker_cleanup_abort_and_delete(monkeypatch: pytest.MonkeyPatch) -> Non
     assert delete["aborted"] is True
     assert delete["deleted"] is True
     assert delete["cleanup_warning"] is None
-    assert fake.aborted == [("ses_1", "/tmp/w"), ("ses_1", "/tmp/w")]
-    assert fake.deleted == [("ses_1", "/tmp/w")]
+    assert fake.aborted == [
+        ("ses_1", os.path.realpath("/tmp/w")),
+        ("ses_1", os.path.realpath("/tmp/w")),
+    ]
+    assert fake.deleted == [("ses_1", os.path.realpath("/tmp/w"))]
 
 
 def test_worker_cleanup_delete_reports_failed_abort(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -171,7 +175,7 @@ def test_worker_cleanup_delete_reports_failed_abort(monkeypatch: pytest.MonkeyPa
     assert isinstance(result["cleanup_warning"], str)
     assert len(result["cleanup_warning"]) <= server.WORKER_CLEANUP_WARNING_MAX_CHARS
     assert "boom-internal" not in (result["cleanup_warning"] or "")
-    assert fake.deleted == [("ses_1", "/tmp/w")]
+    assert fake.deleted == [("ses_1", os.path.realpath("/tmp/w"))]
 
 
 def test_run_git_preserves_leading_whitespace(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -355,7 +356,7 @@ def test_worker_verify_output_schema_advertises_status_fields(
     plain.mkdir()
     result = asyncio.run(server.worker_verify("ses_1", directory=str(plain)))
     assert result["verification"]["ok"] is False
-    assert result["verification"]["directory"] == str(plain)
+    assert result["verification"]["directory"] == os.path.realpath(plain)
     advertised = set(server.WORKER_VERIFY_OUTPUT_SCHEMA["properties"])
     assert "verification" in advertised
     # worker_verify merges a full worker_status snapshot, so every status
@@ -475,7 +476,7 @@ def test_status_verify_cleanup_error_and_scope(
     plain.mkdir()
     verified = asyncio.run(server.worker_verify(task_id, directory=str(plain)))
     assert verified["verification"]["ok"] is False
-    assert verified["verification"]["directory"] == str(plain)
+    assert verified["verification"]["directory"] == os.path.realpath(plain)
 
     fake.delete_error = OpencodeError("DELETE", "/session/x", 404, "gone")
     removed = asyncio.run(server.worker_cleanup(task_id, "/tmp/w", action="delete"))
@@ -484,7 +485,7 @@ def test_status_verify_cleanup_error_and_scope(
     assert removed["action"] == "delete"
     assert removed["aborted"] is True
     assert removed["deleted"] is True
-    assert removed["directory"] == "/tmp/w"
+    assert removed["directory"] == os.path.realpath("/tmp/w")
     assert removed["cleanup_warning"] == "session already gone; record removed"
     # Additive v0.3.0 contract rides along with the legacy cleanup keys.
     assert removed["state"] == "unknown"
