@@ -25,13 +25,25 @@ tools and never includes `exec_run`:
 - State: goal, repo path, branch/worktree, files in scope, files off limits.
 - Write acceptance criteria: observable checks (tests, commands, diff shape).
   No vague "make it better".
-- Pick the model: default is `opencode/muse-spark-1.3-contributor-free`.
-  Never use a paid model unless the boss explicitly asked for it for this task.
-- If unsure which model is free and connected, call `worker_catalog` first
-  (defaults already filter to free + connected).
-- Ordered fallback: free first, then paid `opencode-go/muse-spark-1.3-contributor`
-  ("Muse Spark 1.3 Contributor") from `recommendations[1]`. Use paid only when
-  the free model is unavailable and the boss explicitly approved paid.
+- Pick the model: start with `opencode/muse-spark-1.3-contributor-free`
+  (provider `opencode`, model `muse-spark-1.3-contributor-free`).
+- When availability is uncertain, call `worker_catalog` first and record the
+  selected provider/model before launching.
+- If the free model is missing/unavailable in `worker_catalog`, or `worker_run`
+  cannot start because that provider/model is unavailable, retry the same
+  scoped task exactly once with `opencode-go/muse-spark-1.3-contributor`
+  (provider `opencode-go`, model `muse-spark-1.3-contributor`, from
+  `worker_catalog` `recommendations[1]`).
+- This paid fallback is pre-authorized by the product owner for this project
+  only when the free model is unavailable. Do not use Copilot or any other
+  paid model.
+- The bridge does not silently auto-switch; the coordinator performs one
+  explicit fallback `worker_run`.
+- Never switch models after a worker has started. Never launch parallel
+  duplicate retries of the same task.
+- Distinguish catalog/start unavailability from a worker failure after start.
+  After start, inspect status/output and follow recovery/verification; never
+  silently retry after possible partial mutation.
 
 ## 2. Launch in isolation
 
