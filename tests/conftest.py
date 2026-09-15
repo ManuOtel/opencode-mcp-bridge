@@ -24,7 +24,10 @@ def _isolated_task_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     monkeypatch.delenv("MCP_BEARER_TOKEN_SECONDARY", raising=False)
     monkeypatch.delenv("MCP_ALLOWED_ORIGINS", raising=False)
     monkeypatch.setenv("DEFAULT_DIRECTORY", "/home/tester")
-    monkeypatch.setenv("ALLOWED_DIRECTORIES", "/tmp,/home/tester")
+    monkeypatch.setenv(
+        "ALLOWED_DIRECTORIES",
+        f"/tmp,/home/tester,{os.path.realpath(tmp_path)}",
+    )
     monkeypatch.setattr(server, "_settings", None)
     monkeypatch.setattr(server, "_client", None)
     return state_path
