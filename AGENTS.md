@@ -22,12 +22,25 @@ These rules bind every worker (human or agent) in this repo. They align with the
 
 ## Free-model policy
 
-- Default model is `opencode/muse-spark-1.3-contributor-free`. Use `worker_catalog` to confirm
-  free + connected models.
-- No paid models, no Copilot, unless the boss explicitly requested them for this task.
-- Ordered fallback: free first, then paid `opencode-go/muse-spark-1.3-contributor`
-  ("Muse Spark 1.3 Contributor") from `worker_catalog.recommendations[1]`.
-  Paid use must be intentional; the bridge never auto-selects paid.
+- Start with free default `opencode/muse-spark-1.3-contributor-free`
+  (provider `opencode` + model `muse-spark-1.3-contributor-free`).
+  Call `worker_catalog` first when availability is uncertain
+  (defaults already filter to free + connected).
+- Ordered fallback, one retry only: if the free model is missing/unavailable in
+  `worker_catalog`, or `worker_run` cannot start because that model/provider is
+  unavailable, retry the same scoped task once with paid fallback
+  `opencode-go/muse-spark-1.3-contributor` (provider `opencode-go` + model
+  `muse-spark-1.3-contributor`, `worker_catalog.recommendations[1]`).
+  Never use Copilot or any other paid model.
+- This paid fallback is pre-authorized by the product owner for this project only when
+  the free default is unavailable; it is not a general permission to spend. The bridge
+  never auto-switches to paid; the coordinator performs one explicit fallback `worker_run`
+  after confirming the free model is unavailable.
+- Do not switch models after a worker has started, and never launch parallel duplicate
+  retries. Catalog/start unavailability is distinct from task failure after start: once
+  started, follow `recover-opencode-task` (inspect status/output first, never silently
+  retry after a possible worker-side partial mutation).
+- Record the selected provider/model in the report.
 
 ## Tests and checks (run before reporting done)
 
@@ -62,6 +75,6 @@ git diff --check
 
 ## Reporting
 
-- Report: taskID + model + directory, files changed, checks run with pass/fail, evidence
-  (diff refs, command output), and open follow-ups.
+- Report: taskID + selected provider/model + directory, files changed, checks run
+  with pass/fail, evidence (diff refs, command output), and open follow-ups.
 - Never claim success from a worker summary alone. Quote the diff and the check output.

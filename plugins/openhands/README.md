@@ -130,11 +130,22 @@ No client sleep loops. Use `worker_status` for an immediate snapshot only.
 The bundled `coordinate-opencode-worker` skill enforces this order:
 
 1. Pick a model with `worker_catalog` (free and connected only by default).
-   Default is `opencode/muse-spark-1.3-contributor-free`. No paid models
-   unless explicitly requested for that task. Ordered fallback: free first,
-   then paid `opencode-go/muse-spark-1.3-contributor`
-   ("Muse Spark 1.3 Contributor") from `worker_catalog.recommendations[1]`.
-   Paid use must be intentional; the bridge never auto-selects paid.
+   Start with free default `opencode/muse-spark-1.3-contributor-free`
+   (provider `opencode` + model `muse-spark-1.3-contributor-free`).
+   Ordered fallback, one retry only: if the free model is missing/unavailable in
+   `worker_catalog`, or `worker_run` cannot start because that model/provider is
+   unavailable, retry the same scoped task once with paid fallback
+   `opencode-go/muse-spark-1.3-contributor` (provider `opencode-go` + model
+   `muse-spark-1.3-contributor`) from `worker_catalog.recommendations[1]`.
+   Never use Copilot or any other paid model. This paid fallback is pre-authorized
+   by the product owner for this project only when the free default is unavailable;
+   it is not a general permission to spend. The bridge never auto-switches to paid;
+   the coordinator performs one explicit fallback `worker_run` after confirming the
+   free model is unavailable. Do not switch models after a worker has started, and
+   never launch parallel duplicate retries. Catalog/start unavailability is distinct
+   from task failure after start: once started, inspect status/output first and never
+   silently retry after a possible worker-side partial mutation. Record the selected
+   provider/model in the report.
 2. Launch with `worker_run` (`message`, `directory`, `title`). Save `taskID`
    and `directory`. Use a fresh branch plus a dedicated worktree per worker;
    concurrent workers never share a checkout.
