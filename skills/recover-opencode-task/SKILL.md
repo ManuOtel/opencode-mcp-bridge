@@ -18,9 +18,10 @@ Use when `worker_status` returns `error` or `unknown`, output stalls, or the dir
 - Directory mismatch: fix the directory, do not launch a second worker for the same task.
 - Retry: fix the cause, then `worker_run` again once. Never fire parallel retries of the same task; duplicates cause duplicate side effects.
 - Abort/delete: use `worker_cleanup(action=abort)` for a live stuck session and
-  `worker_cleanup(action=delete)` only when the task is abandoned. Cleanup deletes
+  `worker_cleanup(action=delete)` only when the task is abandoned. Only the given `taskID` is ever touched; unrelated sessions are never listed or killed. Cleanup deletes
   session data and cannot be undone. `abort_session` / `delete_session` are legacy
   equivalents for the full profile only.
+- Approval states: `approval_required` needs `worker_decide`, `approved` needs `worker_resume` (same message, exact-once), rejected or expired needs a fresh `worker_run`.
 
 ## After recovery
 
