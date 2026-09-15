@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -165,12 +166,12 @@ def test_status_and_verify_recover_directory(
     fake.status_map = {task_id: {"type": "busy"}}
     fake.latest = {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
     status = asyncio.run(server.worker_status(task_id))
-    assert status["directory"] == "/tmp/saved"
-    assert fake.status_dirs[-1] == "/tmp/saved"
-    assert fake.latest_dirs[-1] == "/tmp/saved"
+    assert status["directory"] == os.path.realpath("/tmp/saved")
+    assert fake.status_dirs[-1] == os.path.realpath("/tmp/saved")
+    assert fake.latest_dirs[-1] == os.path.realpath("/tmp/saved")
     verify = asyncio.run(server.worker_verify(task_id, directory=str(tmp_path)))
     assert verify["taskID"] == task_id
-    assert verify["directory"] == str(tmp_path)
+    assert verify["directory"] == os.path.realpath(tmp_path)
 
 
 def test_verify_recovers_saved_directory_for_git(
@@ -196,7 +197,7 @@ def test_verify_recovers_saved_directory_for_git(
     fake.latest = {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
     result = asyncio.run(server.worker_verify(created["taskID"]))
     assert result["verification"]["ok"] is True
-    assert result["verification"]["directory"] == str(repo)
+    assert result["verification"]["directory"] == os.path.realpath(repo)
 
 
 def test_no_prompt_or_secrets_persisted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

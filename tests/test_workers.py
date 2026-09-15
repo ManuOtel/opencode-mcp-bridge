@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -345,9 +346,9 @@ def test_worker_run_compact_result_and_defaults(monkeypatch: pytest.MonkeyPatch)
     assert result["state"] == "running"
     assert result["providerID"] == "opencode"
     assert result["modelID"] == "muse-spark-1.3-contributor-free"
-    assert result["directory"] == "/home/tester"
+    assert result["directory"] == os.path.realpath("/home/tester")
     assert result["title"] == "job-1"
-    assert fake.created == [("job-1", "/home/tester")]
+    assert fake.created == [("job-1", os.path.realpath("/home/tester"))]
     assert fake.prompted[0][0:2] == ("ses_1", "do the thing")
 
 
@@ -380,7 +381,7 @@ def test_worker_run_cleans_up_session_on_prompt_failure(
     with pytest.raises(OpencodeError, match="boom") as exc_info:
         asyncio.run(server.worker_run("hi", directory="/tmp/w"))
     assert exc_info.value is original
-    assert fake.deleted == [("ses_1", "/tmp/w")]
+    assert fake.deleted == [("ses_1", os.path.realpath("/tmp/w"))]
 
 
 def test_worker_run_cleanup_failure_preserves_original_error(
@@ -394,7 +395,7 @@ def test_worker_run_cleanup_failure_preserves_original_error(
     with pytest.raises(OpencodeError, match="original") as exc_info:
         asyncio.run(server.worker_run("hi"))
     assert exc_info.value is original
-    assert fake.deleted == [("ses_1", "/home/tester")]
+    assert fake.deleted == [("ses_1", os.path.realpath("/home/tester"))]
 
 
 def test_worker_status_running_with_output(monkeypatch: pytest.MonkeyPatch) -> None:

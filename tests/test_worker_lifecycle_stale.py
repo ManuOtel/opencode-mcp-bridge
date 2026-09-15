@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -217,7 +218,7 @@ def test_status_redaction_and_bounds(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert "token-should-never-appear-abc" not in flat
     assert "Authorization" not in flat
     assert "Bearer" not in flat
-    assert "/tmp/w" in flat  # directory itself is returned exactly, by design
+    assert os.path.realpath("/tmp/w") in flat  # canonical dir, by design
     assert result["stale_reason"] is not None
     assert len(result["stale_reason"]) <= server.TASK_STALE_REASON_MAX_CHARS
     assert len(result["recovery_hint"] or "") <= server.TASK_STALE_REASON_MAX_CHARS
@@ -311,7 +312,7 @@ def test_backward_compat_legacy_records_never_stale(
     assert result["state"] == "running"
     assert result["stale"] is False
     assert result["stale_reason"] is None
-    assert result["directory"] == "/tmp/w"
+    assert result["directory"] == os.path.realpath("/tmp/w")
     # New records carry created_at while legacy ones keep working.
     created = asyncio.run(server.worker_run("fresh", directory="/tmp/w"))
     stored = json.loads(path.read_text())["tasks"]

@@ -216,7 +216,7 @@ def test_resume_starts_same_task_exactly_once(monkeypatch: pytest.MonkeyPatch) -
     assert resumed["approval_state"] == "resumed"
     assert resumed["taskID"] == created["taskID"]
     assert resumed["sessionID"] == "ses_1"
-    assert resumed["directory"] == "/tmp/w"
+    assert resumed["directory"] == os.path.realpath("/tmp/w")
     assert len(fake.created) == 1
     assert len(fake.prompted) == 1
     assert fake.prompted[0][1] == "do the deploy"
