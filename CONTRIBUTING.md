@@ -139,9 +139,10 @@ Releases are coordinator/maintainer operations.
 Workers prepare the release branch; only the maintainer tags and verifies.
 
 - Tag format is `vMAJOR.MINOR.PATCH` (for example `v0.2.0`).
-  The tag must match `pyproject.toml` and both plugin manifests
+  The tag must match `pyproject.toml` and all three plugin manifests
   (`.codex-plugin/plugin.json`,
-  `plugins/claude-code/.claude-plugin/plugin.json`).
+  `plugins/claude-code/.claude-plugin/plugin.json`,
+  `plugins/openhands/.plugin/plugin.json`).
 - All checks must pass before tagging: `uv sync --frozen`, `uv run pytest`,
   `uv run ruff check src tests`, `uv run ruff format --check src tests`,
   `git diff --check`, plus `uv build` and JSON/YAML validation.
