@@ -203,12 +203,12 @@ The repository is the source of truth for the Codex plugin. The root plugin
 is exposed through the repo-scoped marketplace
 `.agents/plugins/marketplace.json`, which points at the repository root via a
 Git-backed source (`source=url`,
-`https://github.com/ManuOtel/opencode-mcp-bridge.git`, `ref=v0.5.0`). No
-restructuring or plugin duplication was needed. The `v0.5.0` ref is the
+`https://github.com/ManuOtel/opencode-mcp-bridge.git`, `ref=v0.5.1`). No
+restructuring or plugin duplication was needed. The `v0.5.1` ref is the
 stable release tag; it exists only after the maintainer creates it.
 
 ```bash
-codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.5.0
+codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.5.1
 ```
 
 Then install the `opencode-worker` plugin from that marketplace (Plugins
