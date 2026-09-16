@@ -55,9 +55,10 @@ REDACT_MAX_DEPTH = 4
 _RE_BEARER = re.compile(r"(?i)\bBearer\s+[^\s\"',;}\]]+")
 _RE_SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(MCP_BEARER_TOKEN(?:_SECONDARY)?|OPENCODE_SERVER_PASSWORD"
+    r"|OPENCODE_API_KEY|OPENCODE_TOKEN"
     r"|PASSWORD|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|API[_-]?SECRET"
     r"|AUTH[_-]?TOKEN|ACCESS[_-]?TOKEN|BEARER|AUTHORIZATION|X-API-KEY"
-    r"|CLIENT[_-]?SECRET)\b\s*([:=]|=>)\s*"
+    r"|CLIENT[_-]?SECRET)\b\s*(=>|[:=])\s*"
     r"(\"[^\"]*\"|'[^']*'|[^\s\",;}\]]+)"
 )
 

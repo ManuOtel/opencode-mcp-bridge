@@ -279,6 +279,32 @@ def test_redact_value_scrubs_nested_mappings_and_sequences() -> None:
     assert redacted["items"][2] == 7
 
 
+def test_central_redactor_fat_arrow_separator_canary() -> None:
+    canary = "CANARY-FATARROW-REDACT-9A8B7C6D-008"
+    scrubbed = observability.redact_text(f"password => {canary}")
+    assert canary not in scrubbed
+    assert observability.REDACTED in scrubbed
+    scrubbed_quoted = observability.redact_text(f'password => "{canary}"')
+    assert canary not in scrubbed_quoted
+    assert observability.REDACTED in scrubbed_quoted
+
+
+def test_central_redactor_scrubs_opencode_prefixed_secrets() -> None:
+    api_canary = "CANARY-OPENCODE-APIKEY-1A2B3C4D-009"
+    token_canary = "CANARY-OPENCODE-TOKEN-5E6F7A8B-010"
+    scrubbed_api = observability.redact_text(f"OPENCODE_API_KEY={api_canary}")
+    scrubbed_token = observability.redact_text(f"OPENCODE_TOKEN: {token_canary}")
+    assert api_canary not in scrubbed_api
+    assert token_canary not in scrubbed_token
+    assert observability.REDACTED in scrubbed_api
+    assert observability.REDACTED in scrubbed_token
+
+
+def test_central_redactor_preserves_bare_unlabelled_token() -> None:
+    bare = "CANARY-BARE-UNLABELLED-9Z8Y7X6W-011"
+    assert observability.redact_text(bare) == bare
+
+
 def test_central_redactor_preserves_safe_fields(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
