@@ -231,9 +231,9 @@ plugin `opencode-worker` (manifest
 `plugins/claude-code/skills/`) is exposed through the repo-root Claude
 marketplace `.claude-plugin/marketplace.json`, which lists the nested plugin
 via the relative source `./plugins/claude-code` (owner `ManuOtel`,
-version `0.5.0`). The Claude marketplace command installs from the
+version `0.5.1`). The Claude marketplace command installs from the
 checked-out Git revision; the stable release is identified by Git tag
-`v0.5.0` once the maintainer creates it.
+`v0.5.1` once the maintainer creates it.
 
 ```bash
 export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
