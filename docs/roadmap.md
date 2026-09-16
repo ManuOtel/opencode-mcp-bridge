@@ -230,22 +230,31 @@ production checkouts.
 Prerequisites: phases 1 and 4; systemd and Docker deploy files;
 existing minimal `/health`.
 
+Release status (v0.5.0, 2026-09-16): slices 1 (metrics) and 2
+(health and readiness split) ship with tests. Slices 3 (log
+redaction), 4 (watchdog and backups), and 5 (upgrade and rollback
+procedure) stay future work. Live proof, OAuth (phase 3), and
+multi-user identity/RBAC (phase 4) also stay future work.
+
 Implementation slices:
 
-1. Metrics: structured counters (tool calls, outcomes, error class,
-   duration) with no prompts, paths beyond the allowed root, or
-   tokens. Expose on localhost or behind auth, never public.
-2. Health and readiness split: `GET /health` stays minimal liveness
-   (open, `{"ok": true|false}`); add authenticated readiness that
-   checks OpenCode reachability and registry writability.
-3. Log redaction: central redactor for tokens, passwords, and
-   `Authorization` headers; failing test if a token fixture appears
-   in output.
-4. Watchdog and backups: restart policy, registry backup before
-   writes on upgrade, documented restore of `TASK_STATE_PATH`.
-5. Upgrade and rollback procedure: deploy only from a clean release
-   worktree at a tag; `uv sync --frozen`, `pytest`, smoke test;
-   rollback is redeploy of the previous tag plus registry restore.
+1. Metrics (implemented in v0.5.0): structured counters (tool calls,
+   outcomes, error class, duration) with no prompts, paths beyond the
+   allowed root, or tokens. Expose on localhost or behind auth, never
+   public.
+2. Health and readiness split (implemented in v0.5.0):
+   `GET /health` stays minimal liveness (open, `{"ok": true}`);
+   add authenticated readiness that checks OpenCode reachability and
+   registry writability.
+3. Log redaction (future): central redactor for tokens, passwords,
+   and `Authorization` headers; failing test if a token fixture
+   appears in output.
+4. Watchdog and backups (future): restart policy, registry backup
+   before writes on upgrade, documented restore of `TASK_STATE_PATH`.
+5. Upgrade and rollback procedure (future): deploy only from a clean
+   release worktree at a tag; `uv sync --frozen`, `pytest`, smoke
+   test; rollback is redeploy of the previous tag plus registry
+   restore.
 
 Tests and evidence: metrics endpoint test; liveness versus readiness
 test; redaction test with canary tokens; backup and restore drill

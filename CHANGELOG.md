@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-16
+
+### Added
+
+- Observability slice (operations roadmap, metrics plus health/readiness
+  split only): open dependency-free `GET /health` liveness (always
+  `200 {"ok": true}`, never touches OpenCode, registry, logs, or
+  metrics), authenticated `GET /ready` readiness (same Bearer token as
+  `/mcp`; `200 {"ok": true}` only when OpenCode answers plus the task
+  registry loads read-only with an existing writable directory, else
+  generic `503 {"ok": false, "error": "unavailable"}` with no backend
+  details and never creating directories or files), and authenticated
+  bounded internal `GET /metrics` (same Bearer token; fixed
+  `event|tool|outcome` counters only, no raw identifiers, paths,
+  prompts, tokens, or exception details).
+- Full fixed allowlist with redaction and no external telemetry:
+  `src/opencode_mcp_bridge/observability.py` covers the full tool
+  catalog (all `worker_*` including `worker_decide`/`worker_resume`,
+  legacy tools, `exec_run`) plus infra subsystems (`mcp_auth`,
+  `readiness`, `liveness`, `metrics`); unknown triples are dropped so
+  cardinality stays bounded; structured JSON logs carry only safe
+  fields (hashed request handles, bounded task IDs, error class plus
+  numeric status); no network calls, no prompt/path/token logging.
+- Focused boundary tests: `tests/test_health.py` (open minimal
+  liveness, backend-failure independence, no metrics pollution),
+  `tests/test_readiness.py` (auth boundaries, generic 503s, read-only
+  registry probe, bounded redacted metrics, `/worker-mcp` never serves
+  `exec_run`), and `tests/test_observability.py` (lifecycle events,
+  canary-secret redaction). `docs/operations.md` documents the new
+  probes with placeholder hosts only.
+- Published plugin versions: Codex `opencode-worker` 0.5.0
+  (`.codex-plugin/plugin.json`, marketplace ref `v0.5.0`), Claude
+  `opencode-worker` 0.5.0
+  (`plugins/claude-code/.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json`), and OpenHands `opencode-worker`
+  0.5.0 (`plugins/openhands/.plugin/plugin.json`). Bridge and registry
+  metadata (`pyproject.toml`, `server.json`) track 0.5.0, and
+  `SERVER_CARD_FALLBACK_VERSION` tracks 0.5.0. Docs (`README.md`,
+  `docs/client-setup.md`) and marketplace test pins now reference
+  `v0.5.0`, and `tests/test_release_coherence.py` guards the full
+  version set.
+
+### Security
+
+- No live deployment or registry approval claimed in this entry:
+  registry status stays metadata-only (not submitted, not approved),
+  readiness/metrics coverage stays structural and offline (no live
+  server run), and the live conformance gate stays opt-in and
+  network-free by default.
+
 ## [0.4.4] - 2026-09-15
 
 ### Fixed
