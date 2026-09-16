@@ -7,9 +7,15 @@ duration, redacted request/task identifiers, action enum, error class,
 and numeric status codes.
 
 In-memory counters mirror the same bounded (event, tool, outcome)
-triples for authenticated GET /metrics. No external telemetry, no
-network calls, no raw identifiers, paths, prompts, tokens, or
-exception details.
+triples for authenticated GET /metrics. The tool allowlist covers the
+full existing tool catalog (all worker_* tools including approval
+operations worker_decide/worker_resume, plus legacy compatibility
+tools and exec_run) and infra subsystems (mcp_auth, readiness,
+liveness, metrics). Events are worker.request, mcp.auth,
+bridge.readiness, bridge.liveness, and bridge.metrics; approval
+operations are tools under worker.request, not a separate event.
+No external telemetry, no network calls, no raw identifiers, paths,
+prompts, tokens, or exception details.
 """
 
 from __future__ import annotations
@@ -53,6 +59,17 @@ METRIC_TOOLS = frozenset(
         "worker_catalog",
         "worker_decide",
         "worker_resume",
+        "list_providers",
+        "list_agents",
+        "create_session",
+        "send_message",
+        "list_sessions",
+        "get_session",
+        "list_messages",
+        "abort_session",
+        "delete_session",
+        "get_diff",
+        "exec_run",
         TOOL_AUTH,
         TOOL_READINESS,
         TOOL_LIVENESS,

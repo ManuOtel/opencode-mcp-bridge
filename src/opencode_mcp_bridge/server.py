@@ -6,9 +6,11 @@ ChatGPT, Claude Code, Codex, and other MCP-compatible harnesses.
 Auth: static Bearer token on every /mcp and /worker-mcp request, with an
 optional secondary rotation token for overlap (see README rotation steps);
 Basic auth to opencode. Health: GET /health is open minimal liveness
-(process alive, no OpenCode or registry dependency). Readiness: GET /ready
-needs the Bearer token and checks OpenCode plus the task registry.
-Metrics: GET /metrics needs the Bearer token and returns bounded counters.
+(process alive, no OpenCode, registry, log, or metrics dependency).
+Readiness: GET /ready needs the Bearer token and checks OpenCode plus
+the task registry read-only (never creates state). Metrics: GET
+/metrics needs the Bearer token and returns bounded counters for the
+full tool catalog plus infra subsystems.
 Discovery: GET /.well-known/oauth-protected-resource (+ /mcp and
 /worker-mcp children) is open RFC 9728 metadata with no secrets and no
 authorization server; 401s on /mcp and /worker-mcp point at it via
@@ -120,8 +122,10 @@ async def health_check(request: Request) -> Response:
     """Open minimal liveness probe with no dependencies.
 
     Unauthenticated by design; always 200 {"ok": true} when the process
-    serves HTTP. Never touches OpenCode, the task registry, or settings,
-    and never exposes versions, URLs, paths, or exception text.
+    serves HTTP. Never touches OpenCode, the task registry, settings,
+    logs, or metrics counters, and never exposes versions, URLs, paths,
+    or exception text. Public probe traffic cannot corrupt operator
+    metrics because this endpoint records nothing.
 
     Args:
         request: Starlette request (unused).
@@ -129,20 +133,18 @@ async def health_check(request: Request) -> Response:
     Returns:
         Minimal JSON liveness response.
     """
-    observability.record(
-        event=observability.EVENT_LIVENESS,
-        tool=observability.TOOL_LIVENESS,
-        outcome=observability.OUTCOME_SUCCEEDED,
-    )
     return JSONResponse({"ok": True})
 
 
 def _registry_writable() -> bool:
     """Check the task registry loads and its directory is writable.
 
-    Missing files count as available (empty registry). Any corrupt,
-    unreadable, or unwritable state returns False. Never raises and
-    never returns paths or exception text.
+    Strictly read-only: never creates directories or files. Missing
+    files count as available (empty registry) only when the parent
+    directory already exists and is writable. A missing parent fails
+    closed (and stays missing). Any corrupt, unreadable, or unwritable
+    state returns False. Never raises and never returns paths or
+    exception text.
 
     Returns:
         True when the registry is usable, else False.
@@ -153,7 +155,11 @@ def _registry_writable() -> bool:
         return False
     try:
         parent = _task_state_path().parent
-        parent.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001 - readiness reports 503, never detail
+        return False
+    try:
+        if not parent.is_dir():
+            return False
     except OSError:
         return False
     return os.access(str(parent), os.W_OK)
