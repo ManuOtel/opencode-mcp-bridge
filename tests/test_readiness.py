@@ -26,12 +26,13 @@ SENSITIVE_MARKERS = (
 )
 
 
-def _make_client(monkeypatch: pytest.MonkeyPatch):
-    """Build a lifespan-managed test client with a fixed bearer token."""
+def _make_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Build a lifespan-managed test client with isolated registry."""
     from starlette.testclient import TestClient
 
     monkeypatch.setenv("OPENCODE_SERVER_PASSWORD", "pw")
     monkeypatch.setenv("MCP_BEARER_TOKEN", TOKEN)
+    monkeypatch.setenv("TASK_STATE_PATH", str(tmp_path / "tasks.json"))
     monkeypatch.setattr(server, "_settings", None)
     monkeypatch.setattr(server, "_client", None)
     observability.reset_metrics()
@@ -42,15 +43,15 @@ def _auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
 
 
-def test_ready_requires_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ready_requires_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """GET /ready without (or with a wrong) token is 401, never 200/503."""
-    with _make_client(monkeypatch) as client:
+    with _make_client(monkeypatch, tmp_path) as client:
         assert client.get("/ready").status_code == 401
         assert client.get("/ready", headers={"Authorization": "Bearer wrong"}).status_code == 401
         assert client.post("/ready", headers=_auth()).status_code in (401, 404, 405)
 
 
-def test_ready_healthy_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ready_healthy_minimal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Healthy OpenCode plus registry returns exactly {"ok": True}."""
 
     class FakeClient:
@@ -58,7 +59,7 @@ def test_ready_healthy_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
             return {"healthy": True, "version": "1.2.3-secret-version"}
 
     monkeypatch.setattr(server, "get_client", lambda: FakeClient())
-    with _make_client(monkeypatch) as client:
+    with _make_client(monkeypatch, tmp_path) as client:
         response = client.get("/ready", headers=_auth())
     assert response.status_code == 200
     assert response.json() == {"ok": True}
@@ -66,7 +67,9 @@ def test_ready_healthy_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
         assert marker not in response.text
 
 
-def test_ready_opencode_failure_is_generic_503(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ready_opencode_failure_is_generic_503(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """OpenCode down returns a generic 503 with no backend details."""
 
     class FakeClient:
@@ -77,7 +80,7 @@ def test_ready_opencode_failure_is_generic_503(monkeypatch: pytest.MonkeyPatch) 
             )
 
     monkeypatch.setattr(server, "get_client", lambda: FakeClient())
-    with _make_client(monkeypatch) as client:
+    with _make_client(monkeypatch, tmp_path) as client:
         response = client.get("/ready", headers=_auth())
     assert response.status_code == 503
     assert response.json() == {"ok": False, "error": "unavailable"}
@@ -85,7 +88,9 @@ def test_ready_opencode_failure_is_generic_503(monkeypatch: pytest.MonkeyPatch) 
         assert marker not in response.text
 
 
-def test_ready_registry_failure_is_generic_503(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ready_registry_failure_is_generic_503(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Corrupt registry returns a generic 503 with no path contents."""
 
     class FakeClient:
@@ -96,7 +101,7 @@ def test_ready_registry_failure_is_generic_503(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         server, "_load_task_state", lambda: (_ for _ in ()).throw(RuntimeError("corrupt"))
     )
-    with _make_client(monkeypatch) as client:
+    with _make_client(monkeypatch, tmp_path) as client:
         response = client.get("/ready", headers=_auth())
     assert response.status_code == 503
     assert response.json() == {"ok": False, "error": "unavailable"}
@@ -104,19 +109,102 @@ def test_ready_registry_failure_is_generic_503(monkeypatch: pytest.MonkeyPatch) 
         assert marker not in response.text
 
 
-def test_metrics_requires_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ready_missing_parent_stays_missing_and_503(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Read-only probe never mkdirs: missing parent stays missing, 503."""
+
+    class FakeClient:
+        async def health(self) -> dict:
+            return {"healthy": True}
+
+    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    with _make_client(monkeypatch, tmp_path) as client:
+        missing = tmp_path / "no-such-parent" / "tasks.json"
+        assert not missing.parent.exists()
+        monkeypatch.setenv("TASK_STATE_PATH", str(missing))
+        response = client.get("/ready", headers=_auth())
+        assert response.status_code == 503
+        assert response.json() == {"ok": False, "error": "unavailable"}
+        assert not missing.parent.exists()
+        assert not missing.exists()
+
+
+def test_ready_head_auth_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """HEAD /ready needs the token; authed HEAD never leaks details."""
+
+    class FakeClient:
+        async def health(self) -> dict:
+            return {"healthy": True}
+
+    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    with _make_client(monkeypatch, tmp_path) as client:
+        assert client.request("HEAD", "/ready").status_code == 401
+        response = client.request("HEAD", "/ready", headers=_auth())
+        assert response.status_code == 200
+        for marker in SENSITIVE_MARKERS:
+            assert marker not in response.text
+
+
+def test_ready_trailing_slash_auth_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """GET /ready/ needs the token and matches /ready when healthy."""
+
+    class FakeClient:
+        async def health(self) -> dict:
+            return {"healthy": True}
+
+    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    with _make_client(monkeypatch, tmp_path) as client:
+        assert client.get("/ready/").status_code == 401
+        response = client.get("/ready/", headers=_auth())
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        for marker in SENSITIVE_MARKERS:
+            assert marker not in response.text
+
+
+def test_metrics_requires_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """GET /metrics without (or with a wrong) token is 401."""
-    with _make_client(monkeypatch) as client:
+    with _make_client(monkeypatch, tmp_path) as client:
         assert client.get("/metrics").status_code == 401
         assert client.get("/metrics", headers={"Authorization": "Bearer wrong"}).status_code == 401
 
 
-def test_metrics_bounded_and_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_metrics_post_auth_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """POST /metrics is never open and never returns counters."""
+    with _make_client(monkeypatch, tmp_path) as client:
+        unauth = client.post("/metrics")
+        assert unauth.status_code == 401
+        assert "metrics" not in unauth.text
+        authed = client.post("/metrics", headers=_auth())
+        assert authed.status_code in (401, 404, 405)
+        assert authed.status_code != 200
+        assert "metrics" not in authed.text
+
+
+def test_metrics_allowlist_covers_full_catalog() -> None:
+    """Static allowlist covers every real tool plus infra subsystems."""
+    assert "worker_decide" in observability.METRIC_TOOLS
+    assert "worker_resume" in observability.METRIC_TOOLS
+    assert set(server.WORKER_TOOL_NAMES) <= set(observability.METRIC_TOOLS)
+    assert set(server.ALL_TOOL_NAMES) <= set(observability.METRIC_TOOLS)
+    for infra in (
+        observability.TOOL_AUTH,
+        observability.TOOL_READINESS,
+        observability.TOOL_LIVENESS,
+        observability.TOOL_METRICS,
+    ):
+        assert infra in observability.METRIC_TOOLS
+
+
+def test_metrics_bounded_and_redacted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Counters use only allowlisted triples and never echo secrets."""
     secret_prompt = "SECRET-PROMPT-UNIQUE-ABC-123"
     secret_request = "SECRET-REQUEST-UNIQUE-XYZ-789"
     secret_token = "SECRET-BEARER-UNIQUE-777"
-    with _make_client(monkeypatch) as client:
+    with _make_client(monkeypatch, tmp_path) as client:
         observability.record(
             event=observability.EVENT_WORKER, tool="worker_run", outcome="succeeded"
         )
@@ -143,7 +231,7 @@ def test_metrics_bounded_and_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
         assert outcome in observability.METRIC_OUTCOMES
 
 
-def test_worker_mcp_never_serves_exec_run(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_mcp_never_serves_exec_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """HTTP tools/list boundary: exec_run only on /mcp, never on /worker-mcp."""
     headers = {
         "Content-Type": "application/json",
@@ -166,7 +254,7 @@ def test_worker_mcp_never_serves_exec_run(monkeypatch: pytest.MonkeyPatch) -> No
         assert tools, response.text[:500]
         return sorted(t["name"] for t in tools)
 
-    with _make_client(monkeypatch) as client:
+    with _make_client(monkeypatch, tmp_path) as client:
         full = _tool_names("/mcp", client)
         worker = _tool_names("/worker-mcp", client)
     assert "exec_run" in full

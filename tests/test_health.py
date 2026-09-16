@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from opencode_mcp_bridge import server
+from opencode_mcp_bridge import observability, server
 
 TOKEN = "test-token-123"
 
@@ -68,3 +68,14 @@ def test_health_stays_open_and_minimal_when_backend_fails(
     assert response.json() == {"ok": True}
     for marker in SENSITIVE_MARKERS:
         assert marker not in response.text
+
+
+def test_health_never_touches_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Public probes record nothing, so scraping cannot corrupt counters."""
+    with _make_client(monkeypatch) as client:
+        observability.reset_metrics()
+        before = observability.snapshot()
+        assert client.get("/health").status_code == 200
+        assert client.get("/health").status_code == 200
+        assert client.request("HEAD", "/health").status_code == 200
+        assert observability.snapshot() == before

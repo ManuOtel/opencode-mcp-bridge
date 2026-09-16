@@ -149,7 +149,10 @@ for legacy compatibility.
 
 ## Endpoints
 
-Two Streamable HTTP endpoints share one Bearer token; `GET /health` stays open.
+Two Streamable HTTP endpoints share one Bearer token; `GET /health`
+plus read-only `GET`/`HEAD` on `/.well-known/oauth-protected-resource`
+(and `/mcp` and `/worker-mcp` children) and
+`/.well-known/mcp/server-card.json` stay open with no secrets.
 
 - `/mcp`: full backward-compatible catalog for existing clients
   (19 in this tree with approval tools; 17 on v0.3.0 bridges with
@@ -173,16 +176,24 @@ the same process, so legacy clients never lose tools when workers go compact.
 
 - `GET /health` (open, no token): minimal liveness only, always
   `200 {"ok": true}` when the process serves HTTP. It never touches
-  OpenCode or the task registry, so use it for reverse-proxy checks,
-  never as proof the bridge can do work.
+  OpenCode, the task registry, logs, or metrics counters, so public
+  probe traffic cannot corrupt operator metrics. Use it for
+  reverse-proxy checks, never as proof the bridge can do work.
 - `GET /ready` (Bearer token required): readiness probe. Returns
   `200 {"ok": true}` only when OpenCode answers and the task registry
-  loads with a writable directory; otherwise generic
-  `503 {"ok": false, "error": "unavailable"}`. No paths, secrets,
+  loads with an already-existing writable directory; otherwise generic
+  `503 {"ok": false, "error": "unavailable"}`. The probe is strictly
+  read-only and never creates directories or files. No paths, secrets,
   prompts, raw IDs, or exception text are ever returned.
 - `GET /metrics` (Bearer token required): bounded internal counters
   as `{"ok": true, "metrics": {"<event>|<tool>|<outcome>": <count>}}`.
-  Keys are fixed allowlisted triples (worker/auth/approval plus
-  readiness/liveness/metrics outcomes) only; values are plain ints.
+  Keys are fixed allowlisted triples only; values are plain ints.
+  Events are `worker.request`, `mcp.auth`, `bridge.readiness`,
+  `bridge.liveness`, and `bridge.metrics`. Tools cover the full
+  existing catalog (all eight `worker_*` tools including approval
+  operations `worker_decide`/`worker_resume`, plus legacy
+  compatibility tools and `exec_run`) and infra subsystems
+  (`mcp_auth`, `readiness`, `liveness`, `metrics`). Approval
+  operations are tools under `worker.request`, not a separate event.
   No raw identifiers, paths, prompts, tokens, or exception details.
   No external telemetry or network calls.

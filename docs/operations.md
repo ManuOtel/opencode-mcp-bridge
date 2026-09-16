@@ -128,9 +128,12 @@ export HEALTH_URL="https://<your-domain>/health"
 curl -fsS "$HEALTH_URL"
 ```
 
-Expect HTTP 200 with a minimal body and no token required. This is the
-only unauthenticated endpoint. It proves the process is alive only;
-it never checks OpenCode or the task registry.
+Expect HTTP 200 with a minimal body and no token required. `GET
+/health` plus read-only `GET`/`HEAD` on
+`/.well-known/oauth-protected-resource` (and `/mcp` and `/worker-mcp`
+children) and `/.well-known/mcp/server-card.json` are the only open
+endpoints. Health proves the process is alive only; it never checks
+OpenCode, the task registry, logs, or metrics counters.
 
 Authenticated readiness and metrics (same Bearer token as `/mcp`):
 
@@ -143,11 +146,13 @@ curl -fsS "$METRICS_URL" -H "Authorization: Bearer $MCP_BEARER_TOKEN"
 ```
 
 Expect `200 {"ok": true}` from `/ready` only when OpenCode answers
-and the task registry loads with a writable directory; otherwise a
-generic `503 {"ok": false, "error": "unavailable"}` with no internal
-details. Without a token both routes return `401`. `/metrics`
-returns bounded `event|tool|outcome` counters only (no identifiers,
-paths, prompts, tokens, or exception details).
+and the task registry loads with an already-existing writable
+directory; otherwise a generic
+`503 {"ok": false, "error": "unavailable"}` with no internal details.
+The probe never creates directories or files. Without a token both
+routes return `401`. `/metrics` returns bounded `event|tool|outcome`
+counters only (full tool catalog plus infra subsystems, no
+identifiers, paths, prompts, tokens, or exception details).
 
 ```bash
 for url in "https://<your-domain>/mcp" "https://<your-domain>/worker-mcp"; do
