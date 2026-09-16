@@ -1,7 +1,50 @@
-# opencode-mcp-bridge
-
-A coordinator-facing MCP server for a self-hosted
-[`OpenCode`](https://opencode.ai) instance (v0.5.1).
+<div align="center">
+  <img
+    src="assets/opencode-mcp-bridge.svg"
+    alt="OpenCode MCP Bridge logo"
+    width="96"
+    height="96" />
+  <h1>opencode-mcp-bridge</h1>
+  <p>A coordinator-facing MCP server for a self-hosted
+  <a href="https://opencode.ai">OpenCode</a> instance (v0.5.1).</p>
+  <p><a href="#first-use-60-seconds"><strong>First use in 60
+  seconds</strong></a></p>
+  <p>Protocol-level compatibility (MCP over Streamable HTTP) - no
+  official partnerships; some harnesses are unverified end-to-end, see
+  <a href="docs/compatibility.md">docs/compatibility.md</a>:</p>
+  <p>
+    <a href="https://developers.openai.com/codex/cli/reference"><img
+      src="https://img.shields.io/badge/Codex-docs-24292e?logo=openai&amp;logoColor=white"
+      alt="Codex docs" /></a>
+    <a href="https://docs.anthropic.com/en/docs/claude-code/mcp"><img
+      src="https://img.shields.io/badge/Claude_Code-docs-24292e?logo=anthropic&amp;logoColor=white"
+      alt="Claude Code docs" /></a>
+    <a href="https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta"><img
+      src="https://img.shields.io/badge/ChatGPT-docs-24292e?logo=openai&amp;logoColor=white"
+      alt="ChatGPT docs" /></a>
+    <a href="https://cursor.com/docs/context/mcp"><img
+      src="https://img.shields.io/badge/Cursor-docs-24292e?logo=cursor&amp;logoColor=white"
+      alt="Cursor docs" /></a>
+    <a href="https://code.visualstudio.com/docs/agents/reference/mcp-configuration"><img
+      src="https://img.shields.io/badge/VS_Code-docs-24292e?logo=visualstudiocode&amp;logoColor=white"
+      alt="VS Code docs" /></a>
+    <a href="https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html"><img
+      src="https://img.shields.io/badge/Gemini_CLI-docs-24292e?logo=google&amp;logoColor=white"
+      alt="Gemini CLI docs" /></a>
+    <a href="https://docs.openhands.dev/openhands/usage/cli/mcp-servers"><img
+      src="https://img.shields.io/badge/OpenHands-docs-24292e"
+      alt="OpenHands docs" /></a>
+    <a href="https://pi.dev/packages/pi-mcp-adapter"><img
+      src="https://img.shields.io/badge/Pi-docs-24292e"
+      alt="Pi docs" /></a>
+    <a href="https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference"><img
+      src="https://img.shields.io/badge/Hermes-docs-24292e"
+      alt="Hermes docs" /></a>
+    <a href="https://github.com/modelcontextprotocol/inspector"><img
+      src="https://img.shields.io/badge/MCP_Inspector-docs-24292e?logo=github&amp;logoColor=white"
+      alt="MCP Inspector docs" /></a>
+  </p>
+</div>
 
 A host harness (Codex, Claude Code, or any MCP-capable client)
 delegates repository or system work to an OpenCode worker on another

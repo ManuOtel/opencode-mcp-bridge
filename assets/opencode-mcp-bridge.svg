@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>OpenCode MCP Bridge terminal dispatch gateway</title>
+  <rect width="64" height="64" rx="14" fill="#050505"/>
+  <rect x="2" y="2" width="60" height="60" rx="12" fill="none" stroke="#262626" stroke-width="3"/>
+  <rect x="60" y="25" width="4" height="14" fill="#050505"/>
+  <rect x="59" y="29.5" width="5" height="5" fill="#00FF41"/>
+  <path d="M16 19 L29 32 L16 45" fill="none" stroke="#00FF41" stroke-width="7" stroke-linecap="square" stroke-linejoin="miter"/>
+  <rect x="33" y="37" width="12" height="8" fill="#FFFFFF"/>
+</svg>
