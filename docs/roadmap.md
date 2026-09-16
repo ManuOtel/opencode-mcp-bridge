@@ -246,7 +246,8 @@ Implementation slices:
    `GET /health` stays minimal liveness (open, `{"ok": true}`);
    add authenticated readiness that checks OpenCode reachability and
    registry writability.
-3. Log redaction (future): central redactor for tokens, passwords,
+3. Log redaction (implemented in feat/v0.5.1-log-redaction-20260916,
+   unreleased): central redactor for tokens, passwords,
    and `Authorization` headers; failing test if a token fixture
    appears in output.
 4. Watchdog and backups (future): restart policy, registry backup
