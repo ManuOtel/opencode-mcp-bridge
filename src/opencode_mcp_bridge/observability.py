@@ -5,6 +5,11 @@ Authorization headers, prompts/messages, environment values, exception
 text, or directory paths. Only safe fields: event, tool, outcome,
 duration, redacted request/task identifiers, action enum, error class,
 and numeric status codes.
+
+In-memory counters mirror the same bounded (event, tool, outcome)
+triples for authenticated GET /metrics. No external telemetry, no
+network calls, no raw identifiers, paths, prompts, tokens, or
+exception details.
 """
 
 from __future__ import annotations
@@ -12,13 +17,20 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 from typing import Any
 
 SERVICE_NAME = "opencode-mcp-bridge"
 EVENT_WORKER = "worker.request"
 EVENT_AUTH = "mcp.auth"
+EVENT_READINESS = "bridge.readiness"
+EVENT_LIVENESS = "bridge.liveness"
+EVENT_METRICS = "bridge.metrics"
 TOOL_AUTH = "mcp_auth"
+TOOL_READINESS = "readiness"
+TOOL_LIVENESS = "liveness"
+TOOL_METRICS = "metrics"
 
 OUTCOME_STARTED = "started"
 OUTCOME_SUCCEEDED = "succeeded"
@@ -26,6 +38,30 @@ OUTCOME_FAILED = "failed"
 OUTCOME_REJECTED = "rejected"
 
 TASK_ID_MAX_CHARS = 128
+
+METRIC_EVENTS = frozenset(
+    {EVENT_WORKER, EVENT_AUTH, EVENT_READINESS, EVENT_LIVENESS, EVENT_METRICS}
+)
+METRIC_OUTCOMES = frozenset({OUTCOME_STARTED, OUTCOME_SUCCEEDED, OUTCOME_FAILED, OUTCOME_REJECTED})
+METRIC_TOOLS = frozenset(
+    {
+        "worker_run",
+        "worker_status",
+        "worker_wait",
+        "worker_verify",
+        "worker_cleanup",
+        "worker_catalog",
+        "worker_decide",
+        "worker_resume",
+        TOOL_AUTH,
+        TOOL_READINESS,
+        TOOL_LIVENESS,
+        TOOL_METRICS,
+    }
+)
+
+_metrics_lock = threading.Lock()
+_metrics_counters: dict[str, int] = {}
 
 logger = logging.getLogger("opencode_mcp_bridge.observability")
 logger.setLevel(logging.INFO)
@@ -122,6 +158,66 @@ def duration_ms_since(start: float) -> float:
     return round(max(0.0, time.perf_counter() - start) * 1000.0, 3)
 
 
+def _metric_key(event: str, tool: str, outcome: str) -> str | None:
+    """Return the bounded counter key, or None for out-of-allowlist input.
+
+    Only exact allowlist members count, so cardinality stays bounded and
+    no caller-controlled string ever becomes a metric label.
+
+    Args:
+        event: Stable event namespace.
+        tool: Tool or subsystem name.
+        outcome: Stable outcome.
+
+    Returns:
+        Key like event|tool|outcome, or None when not allowlisted.
+    """
+    if event not in METRIC_EVENTS:
+        return None
+    if tool not in METRIC_TOOLS:
+        return None
+    if outcome not in METRIC_OUTCOMES:
+        return None
+    return f"{event}|{tool}|{outcome}"
+
+
+def record(*, event: str, tool: str, outcome: str) -> None:
+    """Increment one bounded in-memory counter.
+
+    Unknown (event, tool, outcome) triples are ignored so cardinality
+    stays fixed. Never takes identifiers, paths, prompts, tokens, or
+    exception details, so nothing sensitive can enter the counters.
+
+    Args:
+        event: Stable event namespace (allowlisted only).
+        tool: Tool or subsystem name (allowlisted only).
+        outcome: Stable outcome (allowlisted only).
+    """
+    key = _metric_key(event, tool, outcome)
+    if key is None:
+        return
+    with _metrics_lock:
+        _metrics_counters[key] = _metrics_counters.get(key, 0) + 1
+
+
+def snapshot() -> dict[str, int]:
+    """Return a copy of the bounded in-memory counters.
+
+    Returns:
+        Map of event|tool|outcome keys to counts. Keys are always
+        allowlisted; values are plain ints. Never contains raw
+        identifiers, paths, prompts, tokens, or exception details.
+    """
+    with _metrics_lock:
+        return dict(_metrics_counters)
+
+
+def reset_metrics() -> None:
+    """Clear all in-memory counters (tests only)."""
+    with _metrics_lock:
+        _metrics_counters.clear()
+
+
 def emit(
     *,
     event: str,
@@ -147,6 +243,7 @@ def emit(
         error_class: Exception type name or None.
         status_code: Numeric backend status or None.
     """
+    record(event=event, tool=tool, outcome=outcome)
     payload: dict[str, Any] = {
         "service": SERVICE_NAME,
         "event": event,

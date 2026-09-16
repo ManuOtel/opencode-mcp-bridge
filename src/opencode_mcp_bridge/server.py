@@ -5,7 +5,10 @@ and POST /worker-mcp (eight worker_* tools only, stateless). Works with
 ChatGPT, Claude Code, Codex, and other MCP-compatible harnesses.
 Auth: static Bearer token on every /mcp and /worker-mcp request, with an
 optional secondary rotation token for overlap (see README rotation steps);
-Basic auth to opencode. Health: GET /health is open (reverse-proxy checks).
+Basic auth to opencode. Health: GET /health is open minimal liveness
+(process alive, no OpenCode or registry dependency). Readiness: GET /ready
+needs the Bearer token and checks OpenCode plus the task registry.
+Metrics: GET /metrics needs the Bearer token and returns bounded counters.
 Discovery: GET /.well-known/oauth-protected-resource (+ /mcp and
 /worker-mcp children) is open RFC 9728 metadata with no secrets and no
 authorization server; 401s on /mcp and /worker-mcp point at it via
@@ -114,12 +117,11 @@ def get_client() -> OpencodeClient:
 @mcp.custom_route("/health", methods=["GET"])
 @worker_mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> Response:
-    """Open health endpoint for reverse-proxy checks.
+    """Open minimal liveness probe with no dependencies.
 
-    Unauthenticated by design; returns a minimal safe payload only.
-    Success is 200 {"ok": true} when opencode is reachable, else 503
-    {"ok": false, "error": "unavailable"}. Backend version, URLs,
-    exception text, paths, and credentials are never exposed.
+    Unauthenticated by design; always 200 {"ok": true} when the process
+    serves HTTP. Never touches OpenCode, the task registry, or settings,
+    and never exposes versions, URLs, paths, or exception text.
 
     Args:
         request: Starlette request (unused).
@@ -127,11 +129,108 @@ async def health_check(request: Request) -> Response:
     Returns:
         Minimal JSON liveness response.
     """
+    observability.record(
+        event=observability.EVENT_LIVENESS,
+        tool=observability.TOOL_LIVENESS,
+        outcome=observability.OUTCOME_SUCCEEDED,
+    )
+    return JSONResponse({"ok": True})
+
+
+def _registry_writable() -> bool:
+    """Check the task registry loads and its directory is writable.
+
+    Missing files count as available (empty registry). Any corrupt,
+    unreadable, or unwritable state returns False. Never raises and
+    never returns paths or exception text.
+
+    Returns:
+        True when the registry is usable, else False.
+    """
+    try:
+        _load_task_state()
+    except Exception:  # noqa: BLE001 - readiness reports 503, never detail
+        return False
+    try:
+        parent = _task_state_path().parent
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return os.access(str(parent), os.W_OK)
+
+
+@mcp.custom_route("/ready", methods=["GET"])
+@worker_mcp.custom_route("/ready", methods=["GET"])
+async def ready_check(request: Request) -> Response:
+    """Authenticated readiness probe for OpenCode plus the task registry.
+
+    Requires the Bearer token via middleware (same as /mcp). Returns
+    200 {"ok": true} only when OpenCode answers and the registry loads
+    with a writable directory; else 503 {"ok": false,
+    "error": "unavailable"}. Never exposes paths, secrets, prompts,
+    raw IDs, or exception text.
+
+    Args:
+        request: Starlette request (unused).
+
+    Returns:
+        Minimal JSON readiness response.
+    """
+    start = time.perf_counter()
+    observability.emit(
+        event=observability.EVENT_READINESS,
+        tool=observability.TOOL_READINESS,
+        outcome=observability.OUTCOME_STARTED,
+    )
     try:
         await get_client().health()
-        return JSONResponse({"ok": True})
-    except Exception:  # noqa: BLE001 - health must return 503, never raise or leak
+    except Exception:  # noqa: BLE001 - readiness reports 503, never detail
+        observability.emit(
+            event=observability.EVENT_READINESS,
+            tool=observability.TOOL_READINESS,
+            outcome=observability.OUTCOME_FAILED,
+            duration_ms=observability.duration_ms_since(start),
+        )
         return JSONResponse({"ok": False, "error": "unavailable"}, status_code=503)
+    if not _registry_writable():
+        observability.emit(
+            event=observability.EVENT_READINESS,
+            tool=observability.TOOL_READINESS,
+            outcome=observability.OUTCOME_FAILED,
+            duration_ms=observability.duration_ms_since(start),
+        )
+        return JSONResponse({"ok": False, "error": "unavailable"}, status_code=503)
+    observability.emit(
+        event=observability.EVENT_READINESS,
+        tool=observability.TOOL_READINESS,
+        outcome=observability.OUTCOME_SUCCEEDED,
+        duration_ms=observability.duration_ms_since(start),
+    )
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/metrics", methods=["GET"])
+@worker_mcp.custom_route("/metrics", methods=["GET"])
+async def metrics_endpoint(request: Request) -> Response:
+    """Authenticated bounded internal counters as JSON.
+
+    Requires the Bearer token via middleware (same as /mcp). Keys are
+    fixed event|tool|outcome triples only; values are plain ints. Never
+    contains raw identifiers, paths, prompts, tokens, or exception
+    details. No external telemetry or network calls.
+
+    Args:
+        request: Starlette request (unused).
+
+    Returns:
+        JSON payload with ok plus the bounded metrics map.
+    """
+    observability.emit(
+        event=observability.EVENT_METRICS,
+        tool=observability.TOOL_METRICS,
+        outcome=observability.OUTCOME_SUCCEEDED,
+    )
+    return JSONResponse({"ok": True, "metrics": observability.snapshot()})
 
 
 @mcp.tool(
@@ -4768,9 +4867,10 @@ def server_card_routes() -> list[Route]:
 class BearerAuthMiddleware:
     """ASGI middleware requiring a static Bearer token, except health.
 
-    Covers both /mcp (full catalog) and /worker-mcp (worker-only catalog).
-    Only GET/HEAD on normalized /health (/health/) bypass auth; every
-    other method on health and every MCP route requires the token.
+    Covers /mcp (full catalog), /worker-mcp (worker-only catalog),
+    /ready (readiness), and /metrics (counters). Only GET/HEAD on
+    normalized /health (/health/) bypass auth; every other method on
+    health and every MCP/readiness/metrics route requires the token.
     GET/HEAD on /.well-known/oauth-protected-resource and its /mcp and
     /worker-mcp children also bypass auth (RFC 9728 discovery, no
     secrets). GET/HEAD on /.well-known/mcp/server-card.json also
@@ -4929,7 +5029,7 @@ def create_app() -> Any:
     """Build the Starlette app: /mcp (full) + /worker-mcp (worker-only).
 
     Both MCP endpoints share the same Bearer token; GET /health stays open.
-    RFC 9728 protected-resource metadata under
+    GET /ready and GET /metrics need the same Bearer token. RFC 9728 protected-resource metadata under
     /.well-known/oauth-protected-resource also stays open (no secrets).
     The static Smithery server card under /.well-known/mcp/server-card.json
     also stays open (no secrets). Tool functions are registered once on two FastMCP servers, so there is
@@ -4945,16 +5045,17 @@ def create_app() -> Any:
 
     # Merge routes without a generic (path, methods) dedupe: that would
     # silently drop same-path routes with different endpoints. Only the
-    # intentionally shared /health route (same health_check fn) is deduped;
-    # all other routes are keyed by endpoint identity so collisions survive.
+    # intentionally shared /health, /ready, and /metrics routes (same
+    # handler fn on both servers) are deduped; all other routes are
+    # keyed by endpoint identity so collisions survive.
     seen: set[tuple[Any, ...]] = set()
     merged_routes: list[Any] = []
     for route in [*full_app.routes, *worker_app.routes]:
         path = getattr(route, "path", None)
         methods = tuple(sorted(getattr(route, "methods", None) or []))
         endpoint = getattr(route, "endpoint", None)
-        if path in ("/health", "/health/"):
-            key = ("shared-health", methods)
+        if path in ("/health", "/health/", "/ready", "/ready/", "/metrics", "/metrics/"):
+            key = ("shared-route", path.rstrip("/") or "/", methods)
         else:
             key = (path, methods, id(endpoint))
         if key in seen:

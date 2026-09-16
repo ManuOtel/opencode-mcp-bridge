@@ -137,7 +137,9 @@ there is no local stdio command.
 | --- | --- | --- |
 | `/worker-mcp` | Worker tools only: eight on this bridge (`worker_catalog`, `worker_run`, `worker_wait`, `worker_status`, `worker_verify`, `worker_cleanup`, `worker_decide`, `worker_resume`; six with `worker_wait` on v0.3.0 bridges; five on older v0.2.x bridges) | Default for all new clients. Least privilege; no shell. |
 | `/mcp` | Full compatibility catalog: 19 on this bridge (17 with `worker_wait` on v0.3.0 bridges; 16 on older v0.2.x bridges) | Legacy clients only. `exec_run` stays listed but fails closed unless `ENABLE_EXEC_RUN=true`. |
-| `/health` | None (open) | Reverse-proxy checks. |
+| `/health` | None (open) | Reverse-proxy liveness checks (no OpenCode dependency). |
+| `/ready` | None (Bearer token) | Readiness: OpenCode plus registry, minimal 200/503. |
+| `/metrics` | None (Bearer token) | Bounded internal counters, no sensitive data. |
 
 There is no global tool-profile switch. Both endpoints are always served
 from the same process.
@@ -654,8 +656,9 @@ cp .env.example .env
 uv run python -m opencode_mcp_bridge.server
 ```
 
-Check it: `curl http://127.0.0.1:8087/health` should report OpenCode
-healthy. `POST /mcp` and `POST /worker-mcp` without a Bearer token must
+Check it: `curl http://127.0.0.1:8087/health` should return `{"ok": true}`
+(process liveness only). Authenticated `GET /ready` with the Bearer token
+reports OpenCode plus registry readiness. `POST /mcp` and `POST /worker-mcp` without a Bearer token must
 return 401.
 
 | Variable | Default | Purpose |

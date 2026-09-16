@@ -129,7 +129,25 @@ curl -fsS "$HEALTH_URL"
 ```
 
 Expect HTTP 200 with a minimal body and no token required. This is the
-only unauthenticated endpoint.
+only unauthenticated endpoint. It proves the process is alive only;
+it never checks OpenCode or the task registry.
+
+Authenticated readiness and metrics (same Bearer token as `/mcp`):
+
+```bash
+export MCP_BEARER_TOKEN="<paste-token-here>"
+export READY_URL="https://<your-domain>/ready"
+export METRICS_URL="https://<your-domain>/metrics"
+curl -fsS "$READY_URL" -H "Authorization: Bearer $MCP_BEARER_TOKEN"
+curl -fsS "$METRICS_URL" -H "Authorization: Bearer $MCP_BEARER_TOKEN"
+```
+
+Expect `200 {"ok": true}` from `/ready` only when OpenCode answers
+and the task registry loads with a writable directory; otherwise a
+generic `503 {"ok": false, "error": "unavailable"}` with no internal
+details. Without a token both routes return `401`. `/metrics`
+returns bounded `event|tool|outcome` counters only (no identifiers,
+paths, prompts, tokens, or exception details).
 
 ```bash
 for url in "https://<your-domain>/mcp" "https://<your-domain>/worker-mcp"; do
@@ -173,8 +191,9 @@ connected only) and confirm the configured default model is listed
 first before routing work.
 
 Post-deploy: repeat health, both 401 checks, both `initialize` calls,
-both `tools/list` counts, and one `worker_catalog` call. Any mismatch
-is a failed deploy; roll back per section 5.
+both `tools/list` counts, one `worker_catalog` call, plus authenticated
+`/ready` (expect 200) and `/metrics` (expect 200 with bounded counters).
+Any mismatch is a failed deploy; roll back per section 5.
 
 ## 3b. Live conformance gate (opt-in, one disposable run)
 
