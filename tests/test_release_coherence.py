@@ -128,3 +128,14 @@ def test_codex_marketplace_ref_tracks_bridge_tag() -> None:
     entries = [p for p in marketplace["plugins"] if p["name"] == "opencode-worker"]
     assert len(entries) == 1
     assert entries[0]["source"]["ref"] == f"v{_bridge_version()}"
+
+
+def test_claude_setup_section_tracks_claude_version() -> None:
+    """Claude setup section advertises the current plugin version and tag."""
+    claude = json.loads(
+        (REPO / "plugins" / "claude-code" / ".claude-plugin" / "plugin.json").read_text()
+    )["version"]
+    assert claude == _bridge_version()
+    section = (REPO / "docs" / "client-setup.md").read_text().split("## 7.")[1].split("## 8.")[0]
+    assert f"version `{claude}`" in section
+    assert f"`v{claude}`" in section
