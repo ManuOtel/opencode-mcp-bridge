@@ -1,8 +1,7 @@
 <div align="center">
   <img
     src="assets/opencode-mcp-bridge.svg"
-    alt="OpenCode MCP Bridge logo: green terminal chevron and
-      white worker cursor block on a dark field"
+    alt="OpenCode MCP Bridge logo"
     width="96"
     height="96" />
   <h1>opencode-mcp-bridge</h1>
@@ -15,22 +14,22 @@
   <a href="docs/compatibility.md">docs/compatibility.md</a>:</p>
   <p>
     <a href="https://developers.openai.com/codex/cli/reference"><img
-      src="https://img.shields.io/badge/Codex-docs-24292e"
+      src="https://img.shields.io/badge/Codex-docs-24292e?logo=openai&amp;logoColor=white"
       alt="Codex docs" /></a>
     <a href="https://docs.anthropic.com/en/docs/claude-code/mcp"><img
-      src="https://img.shields.io/badge/Claude_Code-docs-24292e"
+      src="https://img.shields.io/badge/Claude_Code-docs-24292e?logo=anthropic&amp;logoColor=white"
       alt="Claude Code docs" /></a>
     <a href="https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta"><img
-      src="https://img.shields.io/badge/ChatGPT-docs-24292e"
+      src="https://img.shields.io/badge/ChatGPT-docs-24292e?logo=openai&amp;logoColor=white"
       alt="ChatGPT docs" /></a>
     <a href="https://cursor.com/docs/context/mcp"><img
-      src="https://img.shields.io/badge/Cursor-docs-24292e"
+      src="https://img.shields.io/badge/Cursor-docs-24292e?logo=cursor&amp;logoColor=white"
       alt="Cursor docs" /></a>
     <a href="https://code.visualstudio.com/docs/agents/reference/mcp-configuration"><img
-      src="https://img.shields.io/badge/VS_Code-docs-24292e"
+      src="https://img.shields.io/badge/VS_Code-docs-24292e?logo=visualstudiocode&amp;logoColor=white"
       alt="VS Code docs" /></a>
     <a href="https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html"><img
-      src="https://img.shields.io/badge/Gemini_CLI-docs-24292e"
+      src="https://img.shields.io/badge/Gemini_CLI-docs-24292e?logo=google&amp;logoColor=white"
       alt="Gemini CLI docs" /></a>
     <a href="https://docs.openhands.dev/openhands/usage/cli/mcp-servers"><img
       src="https://img.shields.io/badge/OpenHands-docs-24292e"
@@ -42,7 +41,7 @@
       src="https://img.shields.io/badge/Hermes-docs-24292e"
       alt="Hermes docs" /></a>
     <a href="https://github.com/modelcontextprotocol/inspector"><img
-      src="https://img.shields.io/badge/MCP_Inspector-docs-24292e"
+      src="https://img.shields.io/badge/MCP_Inspector-docs-24292e?logo=github&amp;logoColor=white"
       alt="MCP Inspector docs" /></a>
   </p>
 </div>
