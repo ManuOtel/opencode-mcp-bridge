@@ -7,6 +7,10 @@ OpenCode workers do repository work in isolated worktrees.
 Baseline is `origin/master` at v0.2.0 plus the merged hardening after it.
 Read phases in order. Do not skip a gate to start the next phase.
 
+Operator guide: `docs/worker-operating-model.md` covers the worker
+operating model (vocabulary, lifecycle, recipes, SOTA comparison,
+forward plans, benchmarks, security rules).
+
 ## 0. Completed foundation (done, do not rebuild)
 
 The following ships and has tests. Later phases assume it.
