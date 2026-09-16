@@ -4624,7 +4624,7 @@ RESOURCE_DOCUMENTATION_URL = "https://github.com/ManuOtel/opencode-mcp-bridge"
 WELL_KNOWN_PREFIX = "/.well-known/oauth-protected-resource"
 MCP_RESOURCE_SUFFIXES = {"": "", "/mcp": "/mcp", "/worker-mcp": "/worker-mcp"}
 SERVER_CARD_PATH = "/.well-known/mcp/server-card.json"
-SERVER_CARD_FALLBACK_VERSION = "0.4.4"
+SERVER_CARD_FALLBACK_VERSION = "0.5.0"
 
 
 def _public_base_url(scope: Any, headers: dict[bytes, bytes]) -> str:
