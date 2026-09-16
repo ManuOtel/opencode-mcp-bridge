@@ -168,3 +168,21 @@ Two Streamable HTTP endpoints share one Bearer token; `GET /health` stays open.
 
 There is no global tool-profile switch: both endpoints are always served from
 the same process, so legacy clients never lose tools when workers go compact.
+
+## Health, readiness, and metrics
+
+- `GET /health` (open, no token): minimal liveness only, always
+  `200 {"ok": true}` when the process serves HTTP. It never touches
+  OpenCode or the task registry, so use it for reverse-proxy checks,
+  never as proof the bridge can do work.
+- `GET /ready` (Bearer token required): readiness probe. Returns
+  `200 {"ok": true}` only when OpenCode answers and the task registry
+  loads with a writable directory; otherwise generic
+  `503 {"ok": false, "error": "unavailable"}`. No paths, secrets,
+  prompts, raw IDs, or exception text are ever returned.
+- `GET /metrics` (Bearer token required): bounded internal counters
+  as `{"ok": true, "metrics": {"<event>|<tool>|<outcome>": <count>}}`.
+  Keys are fixed allowlisted triples (worker/auth/approval plus
+  readiness/liveness/metrics outcomes) only; values are plain ints.
+  No raw identifiers, paths, prompts, tokens, or exception details.
+  No external telemetry or network calls.

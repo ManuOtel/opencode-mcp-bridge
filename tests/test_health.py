@@ -1,4 +1,4 @@
-"""Health disclosure tests: /health stays minimal and unauthenticated. No network."""
+"""Health liveness tests: /health stays minimal, open, and dependency-free. No network."""
 
 from __future__ import annotations
 
@@ -33,14 +33,13 @@ def _make_client(monkeypatch: pytest.MonkeyPatch):
     return TestClient(server.create_app())
 
 
-def test_health_success_minimal_no_disclosure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """200 returns only {"ok": True} even when backend reports a version."""
+def test_health_liveness_minimal_without_opencode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """200 {"ok": True} without touching OpenCode, even if it is down."""
 
-    class FakeClient:
-        async def health(self) -> dict:
-            return {"healthy": True, "version": "1.2.3-secret-version"}
+    def _boom() -> object:
+        raise AssertionError("liveness must not touch OpenCode")
 
-    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    monkeypatch.setattr(server, "get_client", _boom)
     with _make_client(monkeypatch) as client:
         response = client.get("/health")
     assert response.status_code == 200
@@ -50,8 +49,10 @@ def test_health_success_minimal_no_disclosure(monkeypatch: pytest.MonkeyPatch) -
         assert marker not in response.text
 
 
-def test_health_failure_generic_no_disclosure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """503 returns a generic error without exception text, URLs, or paths."""
+def test_health_stays_open_and_minimal_when_backend_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backend failure never changes liveness: still open 200, no disclosure."""
 
     class FakeClient:
         async def health(self) -> dict:
@@ -63,10 +64,7 @@ def test_health_failure_generic_no_disclosure(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(server, "get_client", lambda: FakeClient())
     with _make_client(monkeypatch) as client:
         response = client.get("/health")
-    assert response.status_code == 503
-    assert response.headers["content-type"].startswith("application/json")
-    payload = response.json()
-    assert payload["ok"] is False
-    assert payload.get("error") == "unavailable"
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
     for marker in SENSITIVE_MARKERS:
         assert marker not in response.text
