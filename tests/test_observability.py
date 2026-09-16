@@ -191,3 +191,121 @@ def test_redact_request_id_never_returns_raw() -> None:
     assert raw not in redacted
     assert redacted.startswith("sha256:")
     assert observability.redact_request_id(raw) == redacted
+
+
+def test_central_redactor_strips_bearer_canary_from_emit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    canary = "CANARY-BEARER-REDACT-9F8E7D6C5B4A-001"
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    caplog.clear()
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_run",
+        outcome=observability.OUTCOME_FAILED,
+        duration_ms=12.5,
+        task_id=f"Bearer {canary}",
+        error_class=f"Bearer {canary}",
+        status_code=500,
+    )
+    events, combined = _events(caplog)
+    assert canary not in combined
+    assert observability.REDACTED in combined
+    assert events and events[0].get("event") == observability.EVENT_WORKER
+    assert events[0].get("tool") == "worker_run"
+    assert events[0].get("outcome") == observability.OUTCOME_FAILED
+    assert events[0].get("duration_ms") == 12.5
+    assert events[0].get("status_code") == 500
+
+
+def test_central_redactor_strips_password_and_apikey_canaries(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pw_canary = "CANARY-PW-REDACT-7A6B5C4D3E2F-002"
+    key_canary = "CANARY-APIKEY-REDACT-3D4E5F607182-003"
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    caplog.clear()
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_status",
+        outcome=observability.OUTCOME_REJECTED,
+        task_id=f"password={pw_canary}",
+        action=f"api_key: {key_canary}",
+        error_class="ValueError",
+    )
+    _, combined = _events(caplog)
+    assert pw_canary not in combined
+    assert key_canary not in combined
+    assert observability.REDACTED in combined
+
+
+def test_central_redactor_strips_secret_env_assignment_canary(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    env_canary = "CANARY-ENV-TOKEN-REDACT-1A2B3C4D5E6F-004"
+    auth_canary = "CANARY-AUTH-REDACT-0F1E2D3C4B5A-005"
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    caplog.clear()
+    observability.emit(
+        event=observability.EVENT_AUTH,
+        tool=observability.TOOL_AUTH,
+        outcome=observability.OUTCOME_REJECTED,
+        task_id=f"MCP_BEARER_TOKEN={env_canary}",
+        error_class=f"Authorization: Bearer {auth_canary}",
+    )
+    _, combined = _events(caplog)
+    assert env_canary not in combined
+    assert auth_canary not in combined
+    assert "MCP_BEARER_TOKEN" in combined or observability.REDACTED in combined
+
+
+def test_redact_value_scrubs_nested_mappings_and_sequences() -> None:
+    pw_canary = "CANARY-NESTED-PW-REDACT-AAAA1111-006"
+    bearer_canary = "CANARY-NESTED-BEARER-REDACT-BBBB2222-007"
+    redacted = observability.redact_value(
+        {
+            "safe": "ok",
+            "count": 42,
+            "nested": {"password": f"password={pw_canary}"},
+            "items": [f"Bearer {bearer_canary}", "plain", 7],
+        }
+    )
+    dumped = json.dumps(redacted, sort_keys=True)
+    assert pw_canary not in dumped
+    assert bearer_canary not in dumped
+    assert redacted["safe"] == "ok"
+    assert redacted["count"] == 42
+    assert redacted["items"][1] == "plain"
+    assert redacted["items"][2] == 7
+
+
+def test_central_redactor_preserves_safe_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+    caplog.clear()
+    observability.emit(
+        event=observability.EVENT_WORKER,
+        tool="worker_run",
+        outcome=observability.OUTCOME_SUCCEEDED,
+        duration_ms=3.25,
+        request_id=observability.redact_request_id("req-123"),
+        task_id=observability.safe_task_id("ses_abc"),
+        status_code=200,
+    )
+    events, _ = _events(caplog)
+    assert events
+    payload = events[-1]
+    assert payload.get("event") == observability.EVENT_WORKER
+    assert payload.get("tool") == "worker_run"
+    assert payload.get("outcome") == observability.OUTCOME_SUCCEEDED
+    assert payload.get("duration_ms") == 3.25
+    assert payload.get("status_code") == 200
+    assert payload.get("task_id") == "ses_abc"
+    assert observability.REDACTED not in json.dumps(
+        {
+            "event": payload.get("event"),
+            "tool": payload.get("tool"),
+            "outcome": payload.get("outcome"),
+        }
+    )

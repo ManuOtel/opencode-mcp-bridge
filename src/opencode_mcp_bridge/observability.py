@@ -4,7 +4,8 @@ Single-line JSON logs for systemd/docker. Never emits bearer tokens,
 Authorization headers, prompts/messages, environment values, exception
 text, or directory paths. Only safe fields: event, tool, outcome,
 duration, redacted request/task identifiers, action enum, error class,
-and numeric status codes.
+and numeric status codes. Every string field passes through the central
+redactor before emission.
 
 In-memory counters mirror the same bounded (event, tool, outcome)
 triples for authenticated GET /metrics. The tool allowlist covers the
@@ -23,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from typing import Any
@@ -44,6 +46,80 @@ OUTCOME_FAILED = "failed"
 OUTCOME_REJECTED = "rejected"
 
 TASK_ID_MAX_CHARS = 128
+
+REDACTED = "[REDACTED]"
+REDACT_MAX_STRING_CHARS = 2000
+REDACT_MAX_ITEMS = 50
+REDACT_MAX_DEPTH = 4
+
+_RE_BEARER = re.compile(r"(?i)\bBearer\s+[^\s\"',;}\]]+")
+_RE_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(MCP_BEARER_TOKEN(?:_SECONDARY)?|OPENCODE_SERVER_PASSWORD"
+    r"|PASSWORD|PASSWD|PWD|SECRET|TOKEN|API[_-]?KEY|API[_-]?SECRET"
+    r"|AUTH[_-]?TOKEN|ACCESS[_-]?TOKEN|BEARER|AUTHORIZATION|X-API-KEY"
+    r"|CLIENT[_-]?SECRET)\b\s*([:=]|=>)\s*"
+    r"(\"[^\"]*\"|'[^']*'|[^\s\",;}\]]+)"
+)
+
+
+def redact_text(value: str) -> str:
+    """Scrub one string of bearer/password/API-key/secret assignments.
+
+    Conservative and deterministic: only the two patterns above are
+    replaced with [REDACTED]; everything else passes through unchanged
+    (then truncated to a fixed bound). Safe allowlist values such as
+    event, tool, outcome, and hashed request handles never match.
+
+    Args:
+        value: Raw string that may contain a secret pattern.
+
+    Returns:
+        Scrubbed string with secret values replaced by [REDACTED].
+    """
+    scrubbed = _RE_BEARER.sub("Bearer " + REDACTED, value)
+    scrubbed = _RE_SECRET_ASSIGNMENT.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", scrubbed)
+    return scrubbed[:REDACT_MAX_STRING_CHARS]
+
+
+def redact_value(value: Any, _depth: int = 0) -> Any:
+    """Scrub strings and bounded nested mappings/sequences.
+
+    Numbers, booleans, and None pass through untouched so safe numeric
+    fields (duration, status) are preserved exactly. Strings go through
+    redact_text. Mappings and sequences recurse with fixed depth, item,
+    and string bounds so no generic unbounded serializer is created and
+    no caller-controlled value can become a metric label (metrics never
+    take identifiers or free-form values).
+
+    Args:
+        value: String, number, mapping, sequence, or None.
+        _depth: Current recursion depth (internal, bounded).
+
+    Returns:
+        Scrubbed value with the same scalar/container shape.
+    """
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return redact_text(value)
+    if _depth >= REDACT_MAX_DEPTH:
+        return REDACTED
+    if isinstance(value, dict):
+        cleaned: dict[Any, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= REDACT_MAX_ITEMS:
+                break
+            safe_key = redact_text(key) if isinstance(key, str) else key
+            if isinstance(key, str) and _RE_SECRET_ASSIGNMENT.match(f"{key}=x"):
+                cleaned[safe_key] = REDACTED
+            else:
+                cleaned[safe_key] = redact_value(item, _depth + 1)
+        return cleaned
+    if isinstance(value, (list, tuple)):
+        items = [redact_value(item, _depth + 1) for item in value[:REDACT_MAX_ITEMS]]
+        return items if isinstance(value, list) else tuple(items)
+    return redact_text(str(value)[:REDACT_MAX_STRING_CHARS])
+
 
 METRIC_EVENTS = frozenset(
     {EVENT_WORKER, EVENT_AUTH, EVENT_READINESS, EVENT_LIVENESS, EVENT_METRICS}
@@ -111,12 +187,14 @@ def safe_task_id(value: Any) -> str | None:
 
     Task IDs are operator correlation IDs (ses_*), not secrets. Bound
     length only; never include paths, prompts, or exception text here.
+    The central redactor still scrubs secret patterns as defense in
+    depth, so a mistakenly passed token never lands in logs verbatim.
 
     Args:
         value: Raw taskID input.
 
     Returns:
-        Bounded string or None when missing/blank.
+        Bounded scrubbed string or None when missing/blank.
     """
     if value is None:
         return None
@@ -124,7 +202,7 @@ def safe_task_id(value: Any) -> str | None:
     cleaned = text.strip()
     if not cleaned:
         return None
-    return cleaned[:TASK_ID_MAX_CHARS]
+    return redact_text(cleaned[:TASK_ID_MAX_CHARS])
 
 
 def classify_error(exc: BaseException) -> tuple[str, int | None]:
@@ -132,7 +210,9 @@ def classify_error(exc: BaseException) -> tuple[str, int | None]:
 
     Uses only the exception type name and numeric status attributes.
     Never inspects or returns exception messages, snippets, paths,
-    URLs, or credentials.
+    URLs, or credentials. The class name passes through the central
+    redactor as defense in depth (type names never match secret
+    patterns, so they are preserved exactly).
 
     Args:
         exc: Raised exception.
@@ -143,7 +223,7 @@ def classify_error(exc: BaseException) -> tuple[str, int | None]:
     status: int | None = getattr(exc, "status", None)
     if not isinstance(status, int):
         status = None
-    return (type(exc).__name__, status)
+    return (redact_text(type(exc).__name__), status)
 
 
 def outcome_for(exc: BaseException) -> str:
@@ -249,6 +329,13 @@ def emit(
 ) -> None:
     """Emit one JSON line with only allowlisted safe fields.
 
+    Every string field passes through the central redactor first, so
+    bearer tokens, Authorization values, passwords, API-key-like
+    values, and known secret env assignments can never appear in the
+    structured log or error fields verbatim. Numeric fields pass
+    through untouched; metrics use the pre-redaction allowlist triple
+    so no caller-controlled value becomes a label.
+
     Args:
         event: Stable event namespace (worker.request, mcp.auth).
         tool: Tool or subsystem name.
@@ -263,14 +350,14 @@ def emit(
     record(event=event, tool=tool, outcome=outcome)
     payload: dict[str, Any] = {
         "service": SERVICE_NAME,
-        "event": event,
-        "tool": tool,
-        "outcome": outcome,
+        "event": redact_value(event),
+        "tool": redact_value(tool),
+        "outcome": redact_value(outcome),
         "duration_ms": duration_ms,
-        "request_id": request_id,
-        "task_id": task_id,
-        "action": action,
-        "error_class": error_class,
+        "request_id": redact_value(request_id) if request_id is not None else None,
+        "task_id": redact_value(task_id) if task_id is not None else None,
+        "action": redact_value(action) if action is not None else None,
+        "error_class": redact_value(error_class) if error_class is not None else None,
         "status_code": status_code,
     }
     try:
