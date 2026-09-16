@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-16
+
+### Added
+
+- Central log redaction in `src/opencode_mcp_bridge/observability.py`:
+  `redact_text` scrubs Bearer values plus password/secret/token/API-key
+  assignments, and `redact_value` scrubs bounded nested mappings and
+  sequences with fixed depth, item, and string bounds. Every string
+  field passes through the central redactor before emission, with
+  defense in depth in `safe_task_id`, `classify_error`, and `emit`;
+  numeric fields (duration, status) pass through untouched, and metrics
+  still use only the fixed `event|tool|outcome` allowlist triple so no
+  caller-controlled value becomes a label. OpenCode key patterns are
+  covered and the fat-arrow (`=>`) separator orders before `:`/`=`.
+- Canary-secret boundary tests in `tests/test_observability.py`: bearer,
+  password/API-key, and secret-env-assignment canaries never appear in
+  emitted output verbatim, nested mappings and sequences are scrubbed
+  while safe values and numerics are preserved, and the v0.5.0
+  observability slice (open dependency-free `GET /health` liveness,
+  authenticated `GET /ready` readiness, authenticated bounded internal
+  `GET /metrics`) is unchanged.
+- Published plugin versions: Codex `opencode-worker` 0.5.1
+  (`.codex-plugin/plugin.json`, marketplace ref `v0.5.1`), Claude
+  `opencode-worker` 0.5.1
+  (`plugins/claude-code/.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json`), and OpenHands `opencode-worker`
+  0.5.1 (`plugins/openhands/.plugin/plugin.json`). Bridge and registry
+  metadata (`pyproject.toml`, `server.json`) track 0.5.1, and
+  `SERVER_CARD_FALLBACK_VERSION` tracks 0.5.1.
+  `tests/test_release_coherence.py` guards the full version set.
+
+### Security
+
+- No live deployment or registry approval claimed in this entry:
+  registry status stays metadata-only (not submitted, not approved),
+  readiness/metrics coverage stays structural and offline (no live
+  server run), and the live conformance gate stays opt-in and
+  network-free by default. Watchdog and backups, the upgrade and
+  rollback procedure, OAuth (phase 3), and multi-user identity/RBAC
+  (phase 4) stay future work and unverified.
+
 ## [0.5.0] - 2026-09-16
 
 ### Added

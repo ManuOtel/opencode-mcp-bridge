@@ -230,11 +230,12 @@ production checkouts.
 Prerequisites: phases 1 and 4; systemd and Docker deploy files;
 existing minimal `/health`.
 
-Release status (v0.5.0, 2026-09-16): slices 1 (metrics) and 2
-(health and readiness split) ship with tests. Slices 3 (log
-redaction), 4 (watchdog and backups), and 5 (upgrade and rollback
-procedure) stay future work. Live proof, OAuth (phase 3), and
-multi-user identity/RBAC (phase 4) also stay future work.
+Release status (v0.5.1 candidate, 2026-09-16): slices 1 (metrics),
+2 (health and readiness split), and 3 (log redaction) ship with
+tests. Slices 4 (watchdog and backups) and 5 (upgrade and rollback
+procedure) stay future work and unverified. Live proof, OAuth
+(phase 3), and multi-user identity/RBAC (phase 4) also stay future
+work and unverified.
 
 Implementation slices:
 
@@ -246,8 +247,8 @@ Implementation slices:
    `GET /health` stays minimal liveness (open, `{"ok": true}`);
    add authenticated readiness that checks OpenCode reachability and
    registry writability.
-3. Log redaction (implemented in feat/v0.5.1-log-redaction-20260916,
-   unreleased): central redactor for tokens, passwords,
+3. Log redaction (shipped in the v0.5.1 candidate): central redactor
+   for tokens, passwords,
    and `Authorization` headers; failing test if a token fixture
    appears in output.
 4. Watchdog and backups (future): restart policy, registry backup

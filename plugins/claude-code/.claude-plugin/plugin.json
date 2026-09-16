@@ -1,6 +1,6 @@
 {
   "name": "opencode-worker",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Drive a self-hosted OpenCode instance as async background workers over MCP.",
   "author": {
     "name": "ManuOtel",
