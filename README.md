@@ -1,9 +1,9 @@
 # opencode-mcp-bridge
 
 A coordinator-facing MCP server for a self-hosted
-[`OpenCode`](https://opencode.ai) instance.
+[`OpenCode`](https://opencode.ai) instance (v0.5.1).
 
-A host harness (Codex, Claude Code, Cursor, or any MCP-capable client)
+A host harness (Codex, Claude Code, or any MCP-capable client)
 delegates repository or system work to an OpenCode worker on another
 machine. The host model scopes the task, coordinates the worker, and
 verifies the result. The bridge speaks MCP over Streamable HTTP with
@@ -11,76 +11,41 @@ Bearer authentication (remote HTTP only; there is no local stdio
 transport). It coordinates OpenCode workers; it does not replace
 OpenCode.
 
-This is not a hosted OpenCode service for production. Each user should
-self-host for production: provide an OpenCode server, or use one they
-control, plus their own bridge deployment and token. The project includes
-an optional community demo endpoint operated by ManuOtel at
-`https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp` only); it
-requires its own token and is not for production. Placeholder URLs such as
-`https://YOUR-BRIDGE-HOST/worker-mcp` are not usable servers.
+Bring your own bridge: you provide an OpenCode server, your own bridge
+deployment, your own token, and your own
+`https://<your-domain>/worker-mcp`. Generic installs never point at
+another person's server. The optional community demo endpoint operated
+by ManuOtel at `https://opencode-mcp.manuotel.com/worker-mcp`
+(`/worker-mcp` only) is opt-in only, requires its own token, and is not
+for production. Self-host for production with your own token.
+`https://YOUR-BRIDGE-HOST/worker-mcp` (as shipped in `.mcp.json`) is a
+placeholder, not a usable server; it fails loudly by design.
 
-## Section map
+## Documentation map
 
-1. [What is new in v0.3.0](#what-is-new-in-v030)
-2. [Quick start (60 seconds)](#quick-start-60-seconds)
-3. [Endpoints](#endpoints)
-4. [Harness setup](#harness-setup)
-5. [Worker workflow](#worker-workflow)
-6. [Tools](#tools)
-7. [Security](#security)
-8. [Local deployment](#local-deployment)
-9. [Contributor workflow](#contributor-workflow)
-10. [Publish and discover](#publish-and-discover)
-11. [Community and license](#community-and-license)
+- [First use](#first-use-60-seconds): env vars and Quick connect.
+- [Endpoints](#endpoints): `/worker-mcp` (recommended) vs `/mcp` (legacy).
+- [Codex and Claude Code](#codex-and-claude-code): concise setup.
+- [More harnesses](#more-harnesses): compact matrix plus `docs/harnesses.md`.
+- [Worker workflow](#worker-workflow): run, wait, verify, clean up.
+- [Security](#security), [Local deployment](#local-deployment),
+  [Contributor workflow](#contributor-workflow),
+  [Publish and discover](#publish-and-discover): pointers below.
+- Full guides: [docs/client-setup.md](docs/client-setup.md),
+  [docs/copilot-setup.md](docs/copilot-setup.md),
+  [docs/harnesses.md](docs/harnesses.md),
+  [docs/compatibility.md](docs/compatibility.md),
+  [docs/tool-api.md](docs/tool-api.md),
+  [docs/worker-operating-model.md](docs/worker-operating-model.md),
+  [docs/operations.md](docs/operations.md),
+  [docs/registry.md](docs/registry.md).
 
-## What is new in v0.3.0
+## First use (60 seconds)
 
-v0.3.0 is a coordinator-ergonomics release. It keeps every v0.2.0
-behavior and adds one tool plus stable task contracts. Everything in
-this section requires the v0.3.0 bridge code; on a v0.2.0 bridge the
-previous behavior still applies (five worker tools, `worker_status`
-polling, no `worker_wait`). Nothing here claims a deployment or a
-registry update.
-
-- `worker_run` stays asynchronous: it starts background work and
-  returns immediately with a `taskID`. It never blocks waiting for
-  the worker to finish.
-- New `worker_wait` (requires v0.3.0 code): a bounded server-side
-  long-poll for one task. It returns when the task state or latest
-  message changes, or at the finite timeout with `timed_out=true`.
-  There is no client sleep loop; the server polls OpenCode about
-  twice per second and returns early on change.
-- `worker_status` stays the immediate snapshot fallback: one
-  read-only look at the current state plus the latest assistant text.
-  Use it after a timed-out wait, after an error, or when you only
-  need one quick look.
-- `worker_verify` stays the evidence gate: the coordinator calls it
-  on a finished worker, then inspects the exact diff and runs tests
-  and lint with the host's own tools before accepting the work.
-- Stable additive task contracts (requires v0.3.0 code): `worker_run`,
-  `worker_wait`, `worker_status`, `worker_verify`, `worker_cleanup`,
-  and `worker_catalog` keep every existing key and add `state`,
-  `timed_out`, `retryable`, `next_action`, `error_code`, and a concise
-  `evidence` object. Existing clients keep working; new coordinators
-  can branch on `next_action` instead of guessing.
-- Tool counts on this bridge: `/worker-mcp` exposes eight worker
-  tools (six on v0.3.0 bridges without approval tools, previous five
-  plus `worker_wait` on v0.3.0, five on v0.2.x) and never includes
-  `exec_run`; `/mcp` keeps the full compatibility catalog (19 on this
-  bridge, 17 on v0.3.0, 16 on v0.2.x). Until you run this bridge code,
-  the counts stay six and 17 on v0.3.0.
-- Model policy is unchanged: free Muse Spark 1.3
-  (`opencode/muse-spark-1.3-contributor-free`) is the default worker
-  model. The paid OpenCode Go Muse Spark 1.3 model
-  (`opencode-go/muse-spark-1.3-contributor`) is an explicit fallback
-  only: pass `providerID`/`modelID` explicitly and only when the task
-  owner asked for paid. The bridge never auto-selects paid.
-
-## Quick start (60 seconds)
-
-You need your own bridge deployment ([Local deployment](#local-deployment))
-and its Bearer token. Keep the token in environment variables. Never
-paste a real token into a file, a chat log, or a commit.
+You need your own bridge deployment and its Bearer token. Keep the
+token in environment variables. Never paste a real token into a file,
+a chat log, or a commit. The optional community demo above is separate
+and may require its own token; generic steps below only use your bridge.
 
 ```bash
 export OPENCODE_MCP_URL="https://<your-domain>/worker-mcp"
@@ -88,167 +53,90 @@ export OPENCODE_MCP_BEARER_TOKEN="<paste-token-here>"
 ```
 
 Replace `<your-domain>` with your bridge host and `<paste-token-here>`
-with the value of `MCP_BEARER_TOKEN` on that host. Then register the
-transport in your harness (see [Harness setup](#harness-setup)).
+with `MCP_BEARER_TOKEN` from that host. Generate a fresh token with
+`python3 -c "import secrets; print(secrets.token_urlsafe(48))"`.
 
 Quick connect (your own bridge): `./scripts/install-client.sh both`
 registers Codex and Claude Code transports from `OPENCODE_MCP_URL` and
-`OPENCODE_MCP_BEARER_TOKEN`. Full steps live in
-[docs/client-setup.md](docs/client-setup.md). The maintainer demo is
-opt-in only and may require its own token; generic installs never point
-at another person's server.
+`OPENCODE_MCP_BEARER_TOKEN`. It fails clearly when either is missing or
+the URL is malformed (`http(s)://...` ending in `/mcp` or
+`/worker-mcp`); it never falls back to anyone else's server.
 
-Rules for every example in this file:
+```bash
+./scripts/install-client.sh both --dry-run
+```
 
-- `https://<your-domain>/worker-mcp` is the safe default. It exposes
-  the worker tools only (eight on this bridge; six with `worker_wait`
-  on v0.3.0 bridges; five on older v0.2.x bridges) and never includes
-  `exec_run`.
-- `https://<your-domain>/mcp` exposes the full legacy catalog, including
-  `exec_run` when the operator enables it. Use it only for legacy clients.
-- `https://YOUR-BRIDGE-HOST/worker-mcp` (as shipped in `.mcp.json`) is a
-  placeholder. It fails loudly by design. Always register your own URL
-  per machine for production. The optional community demo endpoint
-  `https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp` only) is
-  operated by ManuOtel, requires its own token, and is not for production.
-- Generate a fresh token with
-  `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`.
+Full steps: [docs/client-setup.md](docs/client-setup.md).
+Copilot-family products: [docs/copilot-setup.md](docs/copilot-setup.md).
 
-The helper `./scripts/install-client.sh --help` registers Codex or Claude
-Code transports from these variables. It requires both variables and
-fails clearly when either is missing or the URL is malformed (it must be
-`http(s)://...` ending in `/mcp` or `/worker-mcp`); it never falls back
-to anyone else's server. Full Codex and Claude Code steps live in
-[docs/client-setup.md](docs/client-setup.md). Copilot-family products
-have their own guide at [docs/copilot-setup.md](docs/copilot-setup.md).
-For the public registry metadata and publication checklist, see
-[docs/registry.md](docs/registry.md). The registry entry describes the
-software and advertises the optional community demo endpoint operated by
-ManuOtel; it never supplies a token. Self-host for production with your
-own token.
+Every example below uses `https://<your-domain>/worker-mcp` (safe
+default, recommended: the eight worker tools `worker_catalog`,
+`worker_run`, `worker_wait`, `worker_status`, `worker_verify`,
+`worker_cleanup`, `worker_decide`, `worker_resume`; never `exec_run`)
+or `https://<your-domain>/mcp` (legacy full catalog of 19 tools, with
+`exec_run` only when the operator sets `ENABLE_EXEC_RUN=true`).
+Codex plugin bundles do not interpolate env vars in the server URL, so
+register the transport per machine with your concrete URL.
 
 ## Endpoints
 
-Two Streamable HTTP endpoints share one Bearer token.
-`GET /health` plus read-only `GET`/`HEAD` on
-`/.well-known/oauth-protected-resource` (and `/mcp` and `/worker-mcp`
-children) and `/.well-known/mcp/server-card.json` stay open with no
-secrets. Remote HTTP only; there is no local stdio command.
+Two Streamable HTTP endpoints share one Bearer token. `GET /health`
+plus read-only `GET`/`HEAD` on `/.well-known/oauth-protected-resource`
+(and `/mcp` and `/worker-mcp` children) and
+`/.well-known/mcp/server-card.json` stay open with no secrets.
 
 | Endpoint | Tools | Use |
 | --- | --- | --- |
-| `/worker-mcp` | Worker tools only: eight on this bridge (`worker_catalog`, `worker_run`, `worker_wait`, `worker_status`, `worker_verify`, `worker_cleanup`, `worker_decide`, `worker_resume`; six with `worker_wait` on v0.3.0 bridges; five on older v0.2.x bridges) | Default for all new clients. Least privilege; no shell. |
-| `/mcp` | Full compatibility catalog: 19 on this bridge (17 with `worker_wait` on v0.3.0 bridges; 16 on older v0.2.x bridges) | Legacy clients only. `exec_run` stays listed but fails closed unless `ENABLE_EXEC_RUN=true`. |
-| `/health` | None (open) | Reverse-proxy liveness checks (no OpenCode dependency). |
-| `/ready` | None (Bearer token) | Readiness: OpenCode plus registry, minimal 200/503. |
-| `/metrics` | None (Bearer token) | Bounded internal counters, no sensitive data. |
+| `/worker-mcp` | Worker tools only (8, never `exec_run`) | Default for all new clients. Least privilege; no shell. |
+| `/mcp` | Full compatibility catalog (19 tools) | Legacy only. `exec_run` fails closed unless `ENABLE_EXEC_RUN=true`. |
+| `/health` | None (open) | Reverse-proxy liveness checks. |
+| `/ready` | None (Bearer token) | Readiness: OpenCode plus registry (200/503). |
+| `/metrics` | None (Bearer token) | Bounded counters, no sensitive data. |
 
-There is no global tool-profile switch. Both endpoints are always served
-from the same process.
+## Codex and Claude Code
 
-## Harness setup
+Protocol-level compatibility (MCP over Streamable HTTP with a Bearer
+header) unless an end-to-end test is documented. Matrix, status labels,
+and first-call contract: [docs/compatibility.md](docs/compatibility.md).
 
-Compatibility is protocol-level (MCP over Streamable HTTP with a Bearer
-header) unless an end-to-end test is documented in this repo. Client
-config keys differ per product; confirm key names in the linked official
-docs before pasting. The verified matrix, status labels, validation
-boundary, and first-call contract live in
-[docs/compatibility.md](docs/compatibility.md).
-
-| Harness | How to connect | Status |
-| --- | --- | --- |
-| OpenAI Codex CLI | `codex mcp add` with `--bearer-token-env-var` | Protocol-level, syntax from official docs |
-| Claude Code | `claude mcp add --transport http` or `opencode-worker` plugin | Protocol-level, syntax from official docs |
-| ChatGPT Developer Mode / custom MCP connectors | Remote MCP connector, URL mode with your `/worker-mcp` URL | Unverified with a static Bearer header; official docs list OAuth, No Authentication, and Mixed Authentication. Needs an eligible plan and workspace, plus admin approval where required |
-| Cursor | Project `.cursor/mcp.json`, `url` + `headers` | Protocol-level |
-| VS Code | `.vscode/mcp.json`, `servers` + `type: http` + `url` + `headers` (`inputs` for secrets) | Protocol-level, key names from official docs |
-| Gemini CLI | `~/.gemini/settings.json`, `httpUrl` + `headers` | Protocol-level |
-| OpenHands | `openhands mcp add --transport http --header` or TOML `shttp_servers` | Unverified; TOML path documents `url` + `api_key`, CLI path takes a Bearer `--header`. See [docs/compatibility.md](docs/compatibility.md) |
-| Windsurf | `~/.codeium/windsurf/mcp_config.json`, `serverUrl` + `headers` | Protocol-level, key names from official docs |
-| Cline | `cline_mcp_settings.json`, `type: streamableHttp` + `url` + `headers` | Protocol-level, key names from official docs |
-| Roo Code | `mcpServers` entry, `url` + `Authorization` header | Protocol-level, client-specific shape |
-| Pi | `pi-mcp-adapter`, shared `~/.config/mcp/mcp.json` | Protocol-level, syntax from official docs |
-| Hermes Agent | YAML `mcp_servers` entry + `tools.include` | Protocol-level, syntax from official docs |
-| GitHub Copilot / Copilot Studio / M365 Copilot | See [docs/copilot-setup.md](docs/copilot-setup.md) | Separate guide, three distinct cases |
-| MCP Inspector | Streamable HTTP transport + `Authorization` header | Debugging only |
-
-The safe pattern in every client-specific block below: URL
-`https://<your-domain>/worker-mcp`, header
-`Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}`, tools
-`worker_catalog`, `worker_run`, `worker_wait`, `worker_status`, `worker_verify`,
-`worker_cleanup`, `worker_decide`, `worker_resume`. `worker_wait` is the bounded
-server-side long-poll (read-only); `worker_decide`/`worker_resume` are approval-gated.
-Drop `worker_wait` only for older v0.2.x bridges. The shorter
-five-tool lists below keep working on both versions; add `worker_wait`
-when your bridge has it.
-
-### OpenAI Codex CLI
+### Codex
 
 ```bash
 codex mcp add opencode --url "$OPENCODE_MCP_URL" --bearer-token-env-var OPENCODE_MCP_BEARER_TOKEN
 ```
 
-Codex reads the token from the environment at request time. Codex plugin
-bundles do not interpolate environment variables in the server URL, so
-register the transport per machine with your concrete URL. There is also
-an `opencode-worker` plugin with worker skills, installed from a Git
-marketplace pinned at `v0.5.1`:
+Codex reads the token from the environment at request time. The
+`opencode-worker` plugin adds skills (`delegate-to-opencode`, then
+`verify-opencode-work`, on failure `recover-opencode-task`; code changes
+follow `opencode-git-workflow`). Install from the Git marketplace pinned
+at `v0.5.1`, then register your own transport as above (the bundled
+placeholder URL is not usable):
 
 ```bash
 codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.5.1
 ```
 
-Then install `opencode-worker` from that marketplace and register your
-own transport as above (required: the bundled placeholder URL is not
-usable). Details: [docs/client-setup.md](docs/client-setup.md) sections
-2 and 6. Official docs:
-https://developers.openai.com/codex/cli/reference
+Details: [docs/client-setup.md](docs/client-setup.md) sections 2 and 6.
+Official docs: https://developers.openai.com/codex/cli/reference
 
 ### Claude Code
 
-Preferred transport (no skills): a project `.mcp.json` entry. Claude
-Code expands `${VAR}` references in `url` and `headers` at load time,
-so the token stays in the environment and out of the file:
-
-```json
-{
-  "mcpServers": {
-    "opencode": {
-      "type": "http",
-      "url": "${OPENCODE_MCP_URL}",
-      "headers": {
-        "Authorization": "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-CLI alternative (transport only, no skills). Double quotes let the shell
-expand the token before Claude Code sees it:
-
-```bash
-claude mcp add --transport http opencode "$OPENCODE_MCP_URL" --header "Authorization: Bearer $OPENCODE_MCP_BEARER_TOKEN"
-```
-
-Warning: `claude mcp add` writes the resolved header into its local MCP
-config, which can persist the token on disk. Prefer the `.mcp.json`
-form above on shared hosts, and rotate the token if a config file
-leaks.
-
-Prefer the env-var reference form so the token value never lands in
-config (see [docs/client-setup.md](docs/client-setup.md) section 3):
+Preferred transport: a project `.mcp.json` entry with `type: http`,
+`url: ${OPENCODE_MCP_URL}`, and header
+`Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}` (expanded at load
+time, token stays out of the file). CLI alternative, same reference
+form:
 
 ```bash
 claude mcp add --transport http --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' opencode "$OPENCODE_MCP_URL"
 claude mcp add --transport http --header 'Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}' opencode-bridge "$OPENCODE_MCP_URL"
 ```
 
-Recommended path: the `opencode-worker` plugin from this repo's Claude
-marketplace (`.claude-plugin/marketplace.json`). It bundles the MCP transport
-(URL `${OPENCODE_MCP_URL}`, token `${OPENCODE_MCP_BEARER_TOKEN}`) plus
-the `coordinate-opencode-worker` skill. Export both variables before
-installing:
+A shell-expanded header would persist the secret in local config; rotate
+the token if a config file leaks. Recommended: the `opencode-worker`
+plugin from this repo's Claude marketplace
+(`.claude-plugin/marketplace.json`), bundling the transport plus the
+`coordinate-opencode-worker` skill. Export both variables first:
 
 ```bash
 claude plugin marketplace add ManuOtel/opencode-mcp-bridge
@@ -259,87 +147,32 @@ There is no npm or Brew package; both marketplaces install from this Git
 repo. Details: [docs/client-setup.md](docs/client-setup.md) sections 3
 and 7. Official docs: https://docs.anthropic.com/en/docs/claude-code/mcp
 
-### ChatGPT Developer Mode
+## More harnesses
 
-Developer Mode ON, then Connectors, Create connector, URL mode with
-`https://<your-domain>/worker-mcp` plus your Bearer token, then Scan
-Tools. Select `https://<your-domain>/mcp` only when you explicitly need
-the full legacy catalog or `exec_run`.
-Remote MCP connectors need an eligible plan and workspace, and may need
-admin approval. Availability depends on your account, not on this repo.
+Config keys differ per product; confirm key names in the linked official
+docs before pasting. Full copy-ready blocks:
+[docs/harnesses.md](docs/harnesses.md). Safe pattern everywhere: URL
+`https://<your-domain>/worker-mcp`, header
+`Authorization: Bearer ${OPENCODE_MCP_BEARER_TOKEN}`, the eight
+`worker_*` tools (`worker_wait` is the bounded read-only long-poll;
+`worker_decide`/`worker_resume` are approval-gated).
 
-### Cursor
-
-Add to `.cursor/mcp.json` in your project (key names per
-https://cursor.com/docs/context/mcp):
-
-```json
-{
-  "mcpServers": {
-    "opencode-bridge": {
-      "url": "https://<your-domain>/worker-mcp",
-      "headers": {
-        "Authorization": "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-### Gemini CLI
-
-Add to `~/.gemini/settings.json` (key names per
-https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html):
-
-```json
-{
-  "mcpServers": {
-    "opencode-bridge": {
-      "httpUrl": "https://<your-domain>/worker-mcp",
-      "headers": {
-        "Authorization": "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-### VS Code
-
-Add to `.vscode/mcp.json` (workspace) or the user `mcp.json`.
-VS Code uses `servers` (not `mcpServers`) with `type: http`, and
-`inputs` for secrets instead of hardcoded tokens. Key names per
-https://code.visualstudio.com/docs/agents/reference/mcp-configuration:
-
-```json
-{
-  "servers": {
-    "opencode-bridge": {
-      "type": "http",
-      "url": "https://<your-domain>/worker-mcp",
-      "headers": {
-        "Authorization": "Bearer ${input:opencode-bridge-token}"
-      }
-    }
-  },
-  "inputs": [
-    {
-      "type": "promptString",
-      "id": "opencode-bridge-token",
-      "description": "Bearer token for your own bridge (MCP_BEARER_TOKEN)",
-      "password": true
-    }
-  ]
-}
-```
-
-Unverified end-to-end; syntax from the official docs. See
-[docs/compatibility.md](docs/compatibility.md) for the status boundary.
+| Harness | Where | Status |
+| --- | --- | --- |
+| ChatGPT Developer Mode / connectors | [docs/harnesses.md](docs/harnesses.md#chatgpt-developer-mode) | Unverified with a static Bearer header |
+| Cursor | [docs/harnesses.md](docs/harnesses.md#cursor) | Protocol-level |
+| VS Code | [docs/harnesses.md](docs/harnesses.md#vs-code) | Protocol-level |
+| Gemini CLI | [docs/harnesses.md](docs/harnesses.md#gemini-cli) | Protocol-level |
+| OpenHands | [docs/harnesses.md](docs/harnesses.md#openhands) | Unverified |
+| Windsurf | [docs/harnesses.md](docs/harnesses.md#windsurf) | Protocol-level |
+| Cline | [docs/harnesses.md](docs/harnesses.md#cline) | Protocol-level |
+| Roo Code | [docs/harnesses.md](docs/harnesses.md#roo-code) | Protocol-level |
+| Pi | [docs/harnesses.md](docs/harnesses.md#pi) | Protocol-level |
+| Hermes Agent | [docs/harnesses.md](docs/harnesses.md#hermes-agent) | Protocol-level |
+| GitHub Copilot / Copilot Studio / M365 Copilot | [docs/copilot-setup.md](docs/copilot-setup.md) | Separate guide |
+| MCP Inspector | [docs/harnesses.md](docs/harnesses.md#mcp-inspector-debugging) | Debugging only |
 
 ### OpenHands
-
-CLI Bearer path (key names per
-https://docs.openhands.dev/openhands/usage/cli/mcp-servers):
 
 ```bash
 openhands mcp add opencode-bridge --transport http \
@@ -347,308 +180,67 @@ openhands mcp add opencode-bridge --transport http \
   "https://<your-domain>/worker-mcp"
 ```
 
-Replace `<paste-token-here>` with the value of `MCP_BEARER_TOKEN` on
-your bridge host. Do not commit the real token. The TOML settings path
-(`https://docs.openhands.dev/openhands/usage/settings/mcp-settings`)
-documents `shttp_servers` with `url` plus `api_key`, not a generic
-`Authorization` header. Unverified end-to-end; confirm the auth field
-for your OpenHands build before use. See
-[docs/compatibility.md](docs/compatibility.md).
-
-### Windsurf
-
-Edit `~/.codeium/windsurf/mcp_config.json`. Windsurf uses `serverUrl`
-(not `url`) for remote servers and supports `${env:VAR}` interpolation
-in `headers`. Official docs: https://docs.windsurf.com/windsurf/cascade/mcp
-
-```json
-{
-  "mcpServers": {
-    "opencode-bridge": {
-      "serverUrl": "https://<your-domain>/worker-mcp",
-      "headers": {
-        "Authorization": "Bearer ${env:OPENCODE_MCP_BEARER_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-Refresh the server list in Cascade after saving.
-
-### Cline
-
-Open MCP Servers, Configure tab, Configure MCP Servers
-(`cline_mcp_settings.json`), or use the Remote Servers tab with
-Transport Type Streamable HTTP. Official docs:
-https://docs.cline.bot/mcp/mcp-overview
-
-```json
-{
-  "mcpServers": {
-    "opencode-bridge": {
-      "type": "streamableHttp",
-      "url": "https://<your-domain>/worker-mcp",
-      "headers": {
-        "Authorization": "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-Set `"type": "streamableHttp"` explicitly. Omitting it falls back to
-legacy SSE transport.
-
-### Roo Code
-
-Client-specific shape; confirm key names in the Roo Code docs for your
-version. Minimal standard form:
-
-```json
-{
-  "mcpServers": {
-    "opencode-bridge": {
-      "url": "https://<your-domain>/worker-mcp",
-      "headers": {
-        "Authorization": "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-### Pi
-
-Install the adapter, then add the bridge to the shared
-`~/.config/mcp/mcp.json` (key names per
-https://pi.dev/packages/pi-mcp-adapter):
-
-```bash
-pi install npm:pi-mcp-adapter
-```
-
-```json
-{
-  "mcpServers": {
-    "opencode-bridge": {
-      "url": "https://<your-domain>/worker-mcp",
-      "auth": "bearer",
-      "bearerTokenEnv": "OPENCODE_MCP_BEARER_TOKEN",
-      "includeTools": ["worker_catalog", "worker_run", "worker_wait", "worker_status", "worker_verify", "worker_cleanup", "worker_decide", "worker_resume"],
-      "lifecycle": "lazy"
-    }
-  }
-}
-```
-
-The token stays in `OPENCODE_MCP_BEARER_TOKEN`; only the variable name
-is stored in the file. Servers are lazy by default and connect on first
-tool call. There is no one-click plugin for this bridge; do not claim
-one. Adapter version and current syntax:
-https://pi.dev/packages/pi-mcp-adapter
-
-### Hermes Agent
-
-Hermes uses YAML `mcp_servers` entries (key names per
-https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference
-and https://github.com/hermes-agent-org/hermes/blob/main/website/docs/guides/use-mcp-with-hermes.md):
-
-```yaml
-mcp_servers:
-  opencode-bridge:
-    url: "https://<your-domain>/worker-mcp"
-    headers:
-      Authorization: "Bearer ${OPENCODE_MCP_BEARER_TOKEN}"
-    tools:
-      include: [worker_catalog, worker_run, worker_wait, worker_status, worker_verify, worker_cleanup, worker_decide, worker_resume]
-      resources: false
-      prompts: false
-```
-
-Hermes resolves `${VAR}` (or `${env:VAR}`) references from its active
-profile secret scope, falling back to the process environment. Put the
-token in `~/.hermes/.env`; an unset variable keeps its literal
-placeholder. Reload servers with `/reload-mcp` after changing config.
-
-### MCP Inspector (debugging)
-
-```bash
-npx @modelcontextprotocol/inspector
-```
-
-Select Streamable HTTP transport, enter
-`https://<your-domain>/worker-mcp`, and add the `Authorization: Bearer`
-header in the Inspector UI. Never use a real token on a machine you do
-not control. Docs: https://github.com/modelcontextprotocol/inspector
-
-You can also smoke-test the deployment without a client:
-`./scripts/smoke.sh` (see the script header).
+Replace `<paste-token-here>` with `MCP_BEARER_TOKEN` from your bridge
+host (key names per https://docs.openhands.dev/openhands/usage/cli/mcp-servers).
+Unverified end-to-end; full block:
+[docs/harnesses.md](docs/harnesses.md#openhands). Without a client:
+`./scripts/smoke.sh`.
 
 ## Worker workflow
 
-Lifecycle, in order. `worker_run` is asynchronous: it starts the
-worker and returns immediately. Then choose sync or async waiting:
+`worker_run` is asynchronous (returns a `taskID` at once). Then wait
+bounded server-side with `worker_wait`, or snapshot with
+`worker_status`:
 
 ```text
 worker_catalog()
 worker_run(message="Implement X in /path/to/repo", directory="/path/to/repo", title="feat-x")
-# Async (requires v0.3.0 code): repeat until idle or done
 worker_wait(taskID="<taskID>", directory="/path/to/repo", timeout_s=30)
-# Sync fallback (all versions): one immediate snapshot at a time
-worker_status(taskID="<taskID>", directory="/path/to/repo")
 worker_verify(taskID="<taskID>", directory="/path/to/repo")
 worker_cleanup(taskID="<taskID>", directory="/path/to/repo")
 ```
 
-Short flow: catalog, run, wait, verify, clean up. Run returns at
-once; wait blocks server-side until something changes; status takes
-one snapshot; verify gates acceptance; cleanup releases the session.
+1. `worker_catalog` (free and connected by default). Default:
+   `opencode/muse-spark-1.3-contributor-free`. Paid fallback
+   `opencode-go/muse-spark-1.3-contributor` only when explicitly
+   requested, passed as `providerID`/`modelID`. Never auto-selected.
+2. `worker_run` with `message`, `directory`, `title`, optional
+   `requestID` for safe retries (`deduplicated=true` on same-input
+   retry). Save `taskID` and `directory` (status reads are
+   directory-scoped).
+3. `worker_wait` (up to `timeout_s`, default 30, clamped 1-120; returns
+   early on change, or `timed_out=true` with
+   `next_action="worker_wait"`) or `worker_status` for one snapshot.
+   `running` waits again, `idle` verifies, `stale` cleans up,
+   `error`/`unknown` recovers (`skills/recover-opencode-task/SKILL.md`).
+4. `worker_verify`, then inspect the exact diff and run tests and lint
+   with the host's own tools. Never trust a worker summary alone.
+5. `worker_cleanup` (`action=abort` stops, `action=delete` removes).
 
-1. Pick a model: `worker_catalog` (free and connected only by default).
-   Default model is `opencode/muse-spark-1.3-contributor-free`. No paid
-   models unless explicitly requested for that task. Ordered fallback:
-   free first, then paid `opencode-go/muse-spark-1.3-contributor`
-   ("Muse Spark 1.3 Contributor") from `worker_catalog.recommendations[1]`.
-   Paid use must be intentional: pass `providerID`/`modelID` explicitly
-   only when the boss asked for paid for that task. The bridge never
-   auto-selects paid.
-2. Launch: `worker_run` with `message`, `directory`, `title`, and
-   optional `requestID` for safe retries. It returns immediately with
-   a `taskID` while the worker keeps running in the background. Save
-   `taskID` and `directory`.
-3. Wait (v0.3.0 code) or poll (all versions):
-    - Async: `worker_wait` with the same `taskID` and `directory` and a
-      finite `timeout_s` (default 30, clamped to 1-120). The server
-      holds the call until the task state or latest message changes,
-      then returns with `changed=true`. At the deadline it returns
-      `state` as last seen with `timed_out=true` and
-      `next_action="worker_wait"` so you can call it again. Pass
-      `include_output=false` for a cheap state-only wait. There is no
-      client sleep loop.
-   - Sync: `worker_status` with the same `taskID` and `directory`
-     returns one immediate snapshot. Repeat until `idle`, or use it
-     after a timed-out wait to re-check without waiting.
-   States: `running` (wait again), `idle` (verify), `stale` (clean
-   up), `error`/`unknown` (recover, see
-   `skills/recover-opencode-task/SKILL.md`). On v0.3.0 code each
-   result also carries `timed_out`, `retryable`, `next_action`,
-   `error_code`, and concise `evidence`; follow `next_action`
-   (`worker_wait`, `worker_verify`, `worker_status`, or
-   `worker_cleanup`) instead of guessing.
-4. Verify: call `worker_verify`, then inspect the exact diff and run
-   tests and lint with the host's own tools. Never trust a worker
-   summary alone. Verification stays the evidence gate: no work is
-   accepted on a summary without diff plus checks.
-5. Clean up: `worker_cleanup` (`action=abort` stops, `action=delete`
-   removes) when done.
-
-Status and messages are directory-scoped: always pass the `directory`
-returned by `worker_run` when it differs from the server default, or
-status reads `unknown`. When omitted, `worker_status` and
-`worker_verify` recover the saved directory from the durable task
-registry (`TASK_STATE_PATH`). Tasks are idempotent by `requestID`: same
-ID plus same inputs returns the existing task with `deduplicated=true`;
-conflicting reuse fails before side effects.
-
-The plugin skills enforce this workflow: Codex
-(`delegate-to-opencode`, then `verify-opencode-work`, on failure
-`recover-opencode-task`) and Claude Code
-(`coordinate-opencode-worker`). Code changes follow
-`opencode-git-workflow`.
-
-## Tools
-
-Full signatures: [docs/tool-api.md](docs/tool-api.md).
-
-Worker tools (also the `/worker-mcp` catalog: eight on this bridge;
-six with `worker_wait` on v0.3.0 bridges; five on older v0.2.x bridges):
-
-| Tool | What it does |
-| --- | --- |
-| `worker_run` | Start a background worker and return immediately. Returns `taskID` (= session ID), state, model, directory, title, `requestID`, `deduplicated`. Prompts before running. |
-| `worker_wait` | Requires v0.3.0 code. Bounded server-side long-poll for one task: returns on state or message change, or at `timeout_s` (default 30, clamped 1-120) with `timed_out=true`. No client sleep loop. Read-only. |
-| `worker_status` | Immediate snapshot fallback: state (`running`/`idle`/`error`/`unknown`/`stale`) plus latest assistant text only, with truncation counts. Read-only. |
-| `worker_catalog` | List models, free and connected only by default, with bridge defaults and ordered `recommendations` (free first, paid fallback second). Read-only. |
-| `worker_verify` | Evidence gate before acceptance: re-check a finished worker (state plus read-only git evidence). Read-only. |
-| `worker_cleanup` | Abort (`action=abort`) or delete (`action=delete`) a worker session. Prompts before running. |
-| `worker_decide` | Approve or reject a paused approval-gated run; no OpenCode side effects until approved. |
-| `worker_resume` | Start an approved run exactly once with the same inputs. |
-
-Task contracts (require v0.3.0 code; existing keys are unchanged):
-every worker result keeps its old keys and adds `timed_out`,
-`retryable`, `next_action`, `error_code` (for example
-`task_not_found` for a missing task, else `null`), and a concise
-`evidence` object. `next_action` is one of `worker_wait`,
-`worker_verify`, `worker_status`, or `worker_cleanup`: `running`
-waits again, `idle`/`error` verify, `unknown` re-checks status,
-`stale` cleans up.
-
-Legacy tools (`/mcp` only, advanced compatibility):
-
-`list_providers`, `list_agents`, `create_session`, `send_message`,
-`list_sessions`, `get_session`, `list_messages`, `abort_session`,
-`delete_session`, `get_diff`, `exec_run` (raw shell, opt-in via
-`ENABLE_EXEC_RUN=true`, disabled by default).
-
-Compatibility notes: `send_message` accepts `message`; `prompt` remains
-an alias (supply exactly one). `providerID`/`modelID` must be given
-together or omitted; when omitted the bridge uses its configured
-default. `worker_catalog` filters (`free_only`, `connected_only` default
-true, `limit` default 20, cap 100) apply to `models`/`total` only;
-`recommendations` is always two entries (free default rank 1, paid
-`opencode-go/muse-spark-1.3-contributor` rank 2) so clients can discover
-the fallback when the free model is unavailable. `abort_session`, `delete_session`, and `get_diff` are the
-full-profile equivalents of `worker_cleanup` and `worker_verify`;
-prefer the worker tools.
-
-Per-tool approval ships in `.mcp.json`: `worker_run` and
-`worker_cleanup` prompt; `worker_wait`, `worker_status`,
-`worker_catalog`, and `worker_verify` auto-approve (`worker_wait`
-applies once the v0.3.0 code lands). If your client ignores that file, enforce
-the same policy in the client config.
+Contracts: [docs/tool-api.md](docs/tool-api.md). Coordinator behavior:
+[docs/worker-operating-model.md](docs/worker-operating-model.md).
+Approval in `.mcp.json`: `worker_run`/`worker_cleanup` prompt;
+`worker_wait`/`worker_status`/`worker_catalog`/`worker_verify`
+auto-approve.
 
 ## Security
 
-- Treat `MCP_BEARER_TOKEN` like a root password: long random value,
-  rotate on leak, never commit `.env` or tokens. Generic install steps
-  never point at another person's server.
-- Use `/worker-mcp` for least privilege. It never exposes `exec_run`,
-  so a leaked token cannot become a direct shell.
-- Do not expose `/mcp` or set `ENABLE_EXEC_RUN=true` on an untrusted
-  deployment. When enabled, plus open directories, anyone with the
-  Bearer token has a shell where the bridge runs. Prefer session tools
-  for code edits; reserve `exec_run` for system ops.
-- Token rotation (zero downtime): `MCP_BEARER_TOKEN_SECONDARY` accepts
-  one extra token during overlap. Steps: 1) generate a new token,
-  2) set it as `MCP_BEARER_TOKEN_SECONDARY` and restart or reload the
-  bridge, 3) move clients to the new token, 4) promote it to
-  `MCP_BEARER_TOKEN`, unset the secondary, restart. Blank or duplicate
-  secondary values fail startup closed. Comparison is constant-time and
-  token values are never logged.
-- Open endpoints with no secrets: `GET /health` (minimal liveness,
-  never touches metrics) plus read-only `GET`/`HEAD` on RFC 9728
-  discovery at `GET /.well-known/oauth-protected-resource` (and its
-  `/mcp` and `/worker-mcp` children, no secrets, no authorization
-  server) and `GET /.well-known/mcp/server-card.json`. Everything
-  under `/mcp` and `/worker-mcp` requires the Bearer token.
-- Request-body limit: `MCP_MAX_BODY_BYTES` (default 1048576, 1 MiB) caps
-  the declared `Content-Length` and the actual streamed body on `/mcp`
-  and `/worker-mcp`. Oversized requests get a generic 413 before any
-  tool runs. Auth still runs first, so missing tokens stay 401.
-- Browser-origin allowlist (optional): `MCP_ALLOWED_ORIGINS` is a
-  comma-separated exact-origin list (`scheme://host[:port]`, http/https,
-  no path/query/fragment) for `/mcp` and `/worker-mcp`. Unset or blank
-  means no origin policy. Absent `Origin` and `Referer` stays allowed
-  for CLI/SDK clients. Auth runs first (missing tokens stay 401),
-  `/health` never checks origins, and rejections are a generic 403 with
-  no secret or header echo.
+- `MCP_BEARER_TOKEN` is root-equivalent: long random value, rotate on
+  leak, never commit `.env` or tokens.
+- `/worker-mcp` never exposes `exec_run`; a leaked worker token cannot
+  become a direct shell. Do not expose `/mcp` or set
+  `ENABLE_EXEC_RUN=true` where a shell is not intended.
+- Rotation: `MCP_BEARER_TOKEN_SECONDARY` holds one overlap token; move
+  clients over, promote, restart. Blank or duplicate values fail closed.
+- Open with no secrets: `GET /health` plus read-only RFC 9728 discovery
+  and server card. Everything under `/mcp` and `/worker-mcp` needs the
+  Bearer token.
 
 ## Local deployment
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), plus a
-running `opencode serve` or `opencode web` (see
-[OpenCode server docs](https://opencode.ai/docs/server/)).
+Needs Python 3.11+, [uv](https://docs.astral.sh/uv/), and a running
+`opencode serve` or `opencode web` ([server
+docs](https://opencode.ai/docs/server/)).
 
 ```bash
 git clone https://github.com/ManuOtel/opencode-mcp-bridge.git
@@ -659,47 +251,17 @@ cp .env.example .env
 uv run python -m opencode_mcp_bridge.server
 ```
 
-Check it: `curl http://127.0.0.1:8087/health` should return `{"ok": true}`
-(process liveness only). Authenticated `GET /ready` with the Bearer token
-reports OpenCode plus registry readiness. `POST /mcp` and `POST /worker-mcp` without a Bearer token must
-return 401.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `OPENCODE_BASE_URL` | `http://127.0.0.1:4096` | OpenCode server URL. |
-| `OPENCODE_SERVER_USERNAME` | `opencode` | Basic auth user for OpenCode. |
-| `OPENCODE_SERVER_PASSWORD` | (required) | Basic auth password of your OpenCode server. |
-| `MCP_BEARER_TOKEN` | (required) | Static token clients send as `Authorization: Bearer <token>`. |
-| `MCP_BEARER_TOKEN_SECONDARY` | (unset) | Overlap token for rotation; unset means single-token mode. |
-| `MCP_HOST` | `127.0.0.1` | Bridge listen address. Use a host IP reachable from your reverse proxy when proxying from Docker. |
-| `MCP_PORT` | `8087` | Bridge listen port. |
-| `DEFAULT_DIRECTORY` | `$HOME` | Working directory for sessions when clients omit it. |
-| `DEFAULT_PROVIDER_ID` | `opencode` | Default provider. |
-| `DEFAULT_MODEL_ID` | `muse-spark-1.3-contributor-free` | Default model. |
-| `EXEC_TIMEOUT_S` | `120` | Cap for `exec_run` timeouts. |
-| `EXEC_MAX_OUTPUT_CHARS` | `20000` | Output truncation cap for `exec_run`. |
-| `ENABLE_EXEC_RUN` | `false` | Opt-in for `exec_run` on `/mcp`. Set `true` only where a shell is intended. |
-| `TASK_STATE_PATH` | `/var/lib/opencode-mcp-bridge/tasks.json` | JSON registry for durable tasks (atomic writes, bounded records, no prompts or secrets). |
-| `MCP_MAX_BODY_BYTES` | `1048576` | Max request body (bytes) for `/mcp` and `/worker-mcp`, declared and streamed; oversized returns generic 413. |
-| `MCP_ALLOWED_ORIGINS` | (unset) | Optional exact-origin allowlist for `/mcp` and `/worker-mcp`; unset/blank disables. Single trailing slash stripped. |
-
-Put a reverse proxy with TLS in front. Traefik example:
-`deploy/traefik-opencode-mcp.yaml`. Host systemd keeps full terminal
-access for `exec_run` (see `deploy/opencode-mcp-bridge.service`, env
-file `0640`); Docker scopes `exec_run` to the container
-(`docker compose up -d` after filling `.env`). For clean release,
-pre/post-deploy checks, rotation, rollback, and log steps, follow
-[docs/operations.md](docs/operations.md).
+`curl http://127.0.0.1:8087/health` returns `{"ok": true}`. `POST /mcp`
+and `POST /worker-mcp` without a token return 401. Key variables:
+`OPENCODE_BASE_URL`, `OPENCODE_SERVER_PASSWORD`, `MCP_BEARER_TOKEN`,
+`ENABLE_EXEC_RUN` (`false`), `TASK_STATE_PATH`, `MCP_MAX_BODY_BYTES`,
+`MCP_ALLOWED_ORIGINS`. Put a reverse proxy with TLS in front. Release,
+checks, rotation, rollback, logs: [docs/operations.md](docs/operations.md).
 
 ## Contributor workflow
 
-Read [AGENTS.md](AGENTS.md) first: ownership boundaries, edit
-discipline, free-model policy, test commands, secrets, worktree and
-commit rules, and reporting. The worker playbook lives in `skills/`
-(`delegate-to-opencode`, `verify-opencode-work`,
-`recover-opencode-task`, `opencode-git-workflow`). Planned work lives in
-[docs/roadmap.md](docs/roadmap.md); read phases in order and do not skip
-a gate.
+Read [AGENTS.md](AGENTS.md) first (ownership, edits, free-model policy,
+tests, secrets, worktrees, commits, reporting). Skills in `skills/`.
 
 ```bash
 uv sync
@@ -709,80 +271,27 @@ uv run ruff format --check src tests
 git diff --check
 ```
 
-CI (`.github/workflows/ci.yml`) runs pull requests on Python 3.14 only,
-and pushes to master across Python 3.11, 3.12, 3.13, and 3.14, plus JSON
-validation of the Codex and Claude plugin manifests and a no-push
-Docker build on master pushes only. `ruff format` in write mode touches Python files: use
-`--check` only and report failures instead of fixing them here.
-
 ## Publish and discover
 
-Ready in this repo (no secrets committed):
-
-- `server.json`: schema-valid remote Streamable HTTP entry for
-  `io.github.ManuOtel/opencode-mcp-bridge`, safe `/worker-mcp`
-  only, auth as a required secret `Authorization` header. The URL
-  `https://opencode-mcp.manuotel.com/worker-mcp` is the optional community
-  demo endpoint operated by ManuOtel; it supplies no token. Self-host for
-  production with your own token.
-- `glama.json`: maintainer claim for `ManuOtel`, nothing else.
-- Smithery: no checked-in file needed; URL publishing is a
-  dashboard/CLI flow. Full checklist:
-  [docs/registry.md](docs/registry.md).
-
-Still requires a human owner login (not done by this change):
-
-- MCP Registry: `mcp-publisher login github` as `ManuOtel`, then
-  `validate` and `publish` the checked-in `server.json`, which advertises
-  `https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp` only).
-  Start here:
-  [publishing quickstart](https://github.com/modelcontextprotocol/registry/blob/main/docs/modelcontextprotocol-io/quickstart.mdx),
-  [server.json spec](https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/server-json/generic-server-json.md),
-  [live API docs](https://registry.modelcontextprotocol.io/docs).
-- Glama: add this repo at
-  [glama.ai/mcp/servers](https://glama.ai/mcp/servers), then Claim
-  ownership as `ManuOtel` to pick up `glama.json`. Background:
-  [what is glama.json](https://glama.ai/blog/2025-07-08-what-is-glamajson).
-- Smithery: publish at [smithery.ai/new](https://smithery.ai/new)
-  from your own public HTTPS `/worker-mcp` URL
-  ([docs](https://smithery.ai/docs/build/publish)). This bridge uses
-  a static Bearer token, not OAuth, so an auth-required endpoint
-  needs manual review during the Smithery scan: supply the token out
-  of band. The bridge serves truthful RFC 9728 metadata at
-  `GET /.well-known/oauth-protected-resource` (plus `/mcp` and
-  `/worker-mcp` children, no secrets, no authorization server) and
-  points 401s at it via `WWW-Authenticate`, which fixes the
-  "not a valid OAuth Protected Resource Metadata response" scan
-  error without weakening auth. It does not add an OAuth login flow;
-  that needs a real authorization server and is out of scope.
-
-Listing versus hosting: a registry entry lists the open-source
-bridge (repo, docs, install). It never grants access or supplies a token.
-The project includes an optional community demo endpoint operated by
-ManuOtel at `https://opencode-mcp.manuotel.com/worker-mcp` (`/worker-mcp`
-only); production users should self-host with their own HTTPS URL and
-token.
-
-Endpoint reminder: `/worker-mcp` (worker tools only, no shell) is
-the default for all new clients; `/mcp` (full compatibility catalog,
-`exec_run` opt-in) is legacy only. Tool counts are eight and 19 on
-this bridge (six and 17 on v0.3.0 bridges; five and 16 on older
-v0.2.x bridges). Never publish an endpoint you do
-not operate, and never commit tokens.
+In-repo, no secrets: `server.json` (safe `/worker-mcp` metadata for
+`io.github.ManuOtel/opencode-mcp-bridge`), `glama.json` (claim for
+`ManuOtel`), Smithery via dashboard/CLI. Publishing needs a human owner
+login. Checklist: [docs/registry.md](docs/registry.md). A registry entry
+lists the software; it never grants access or supplies a token.
+`/worker-mcp` (8 tools, no shell) is the default; `/mcp` (19 tools,
+`exec_run` opt-in) is legacy. Never publish an endpoint you do not
+operate, and never commit tokens.
 
 ## Community and license
 
-- Read [CONTRIBUTING.md](CONTRIBUTING.md) before you change code or docs.
-- Obey the [Code of Conduct](CODE_OF_CONDUCT.md) in all project spaces.
-- Report security faults in private per [SECURITY.md](SECURITY.md).
-- Open a [bug report or feature
-  request](https://github.com/ManuOtel/opencode-mcp-bridge/issues/new/choose)
-  or read [open
-  issues](https://github.com/ManuOtel/opencode-mcp-bridge/issues).
-- Open [pull
-  requests](https://github.com/ManuOtel/opencode-mcp-bridge/pulls) from
-  a feature branch, never directly from `master`.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing code or docs.
+Follow the [Code of Conduct](CODE_OF_CONDUCT.md); report security faults
+per [SECURITY.md](SECURITY.md). [Open an
+issue](https://github.com/ManuOtel/opencode-mcp-bridge/issues/new/choose)
+or a [pull
+request](https://github.com/ManuOtel/opencode-mcp-bridge/pulls) from a
+feature branch.
 
-License: PolyForm Noncommercial 1.0.0 - free for noncommercial use and
-modification, commercial use needs permission. See [LICENSE.md](LICENSE.md).
-For a commercial license, reach out: manuotel@gmail.com
+License: PolyForm Noncommercial 1.0.0 - free for noncommercial use, see
+[LICENSE.md](LICENSE.md). Commercial use needs permission:
+manuotel@gmail.com

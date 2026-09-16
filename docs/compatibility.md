@@ -44,8 +44,9 @@ paths, the row says so explicitly.
 | OpenHands | CLI: `openhands mcp add <name> --transport http --header "Authorization: Bearer <token>" <url>`; file/TOML path uses `shttp_servers` with `url` plus `api_key` and optional `timeout` | `tools/list` on `/worker-mcp`, then `worker_catalog` | Unverified; auth boundary: the TOML settings path documents `url` plus `api_key`, not a generic `Authorization` header. The CLI `--header` form is the Bearer path. Confirm the auth field for your OpenHands build in the official docs before use. | https://docs.openhands.dev/openhands/usage/settings/mcp-settings ; https://docs.openhands.dev/openhands/usage/cli/mcp-servers ; https://docs.openhands.dev/openhands/usage/cli/command-reference |
 | Pi / Hermes | Pi: `pi-mcp-adapter` plus shared `~/.config/mcp/mcp.json` with `url`, `auth: bearer`, `bearerTokenEnv: OPENCODE_MCP_BEARER_TOKEN`, `includeTools` (eight `worker_*`), `lifecycle: lazy`. Hermes: YAML `mcp_servers` with `url`, `headers.Authorization`, `tools.include` (eight `worker_*`) | `tools/list` on `/worker-mcp`, then `worker_catalog` | Automated (doc shape in CI); end-to-end Unverified | https://pi.dev/packages/pi-mcp-adapter ; https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference ; https://github.com/hermes-agent-org/hermes/blob/main/website/docs/guides/use-mcp-with-hermes.md |
 
-Full per-client blocks stay in `README.md` (Harness setup) and
-`docs/client-setup.md` (Codex, Claude Code). This file is the matrix
+Full per-client blocks stay in `docs/harnesses.md` (extended harness
+setup) and `docs/client-setup.md` (Codex, Claude Code); the README
+links both. This file is the matrix
 plus the first-call contract; it does not duplicate those blocks.
 
 ## Clean install check (deterministic, network-free)
