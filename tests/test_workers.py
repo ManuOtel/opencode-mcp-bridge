@@ -39,6 +39,12 @@ def test_prompt_async_path_payload_and_defaults() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path == "/global/health":
+            return httpx.Response(
+                200,
+                json={"healthy": True, "version": "1.18.30"},
+                request=request,
+            )
         return httpx.Response(204, request=request)
 
     async def run() -> bool:
@@ -49,7 +55,12 @@ def test_prompt_async_path_payload_and_defaults() -> None:
             await client.close()
 
     assert asyncio.run(run()) is True
-    request = requests[0]
+    assert [request.url.path for request in requests] == [
+        "/global/health",
+        "/session/ses_x/prompt_async",
+    ]
+    assert requests[0].method == "GET"
+    request = requests[1]
     assert request.method == "POST"
     assert request.url.path == "/session/ses_x/prompt_async"
     assert dict(request.url.params) == {"directory": "/tmp/w"}
@@ -65,6 +76,12 @@ def test_prompt_async_overrides_and_agent() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path == "/global/health":
+            return httpx.Response(
+                200,
+                json={"healthy": True, "version": "1.18.30"},
+                request=request,
+            )
         return httpx.Response(204, request=request)
 
     async def run() -> None:
@@ -77,7 +94,13 @@ def test_prompt_async_overrides_and_agent() -> None:
             await client.close()
 
     asyncio.run(run())
-    assert json.loads(requests[0].content) == {
+    assert [request.url.path for request in requests] == [
+        "/global/health",
+        "/session/ses_x/prompt_async",
+    ]
+    assert requests[0].method == "GET"
+    assert requests[1].method == "POST"
+    assert json.loads(requests[1].content) == {
         "parts": [{"type": "text", "text": "hi"}],
         "model": {"providerID": "acme", "modelID": "m-1"},
         "agent": "plan",
@@ -99,6 +122,12 @@ def test_get_session_status_path_and_shape() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path == "/global/health":
+            return httpx.Response(
+                200,
+                json={"healthy": True, "version": "1.18.30"},
+                request=request,
+            )
         return httpx.Response(200, json=payload, request=request)
 
     async def run() -> dict[str, Any]:
@@ -109,9 +138,14 @@ def test_get_session_status_path_and_shape() -> None:
             await client.close()
 
     assert asyncio.run(run()) == payload
+    assert [request.url.path for request in requests] == [
+        "/global/health",
+        "/session/status",
+    ]
     assert requests[0].method == "GET"
-    assert requests[0].url.path == "/session/status"
-    assert dict(requests[0].url.params) == {"directory": "/tmp/w"}
+    assert requests[1].method == "GET"
+    assert requests[1].url.path == "/session/status"
+    assert dict(requests[1].url.params) == {"directory": "/tmp/w"}
 
 
 def test_get_latest_assistant_picks_last_and_flags_error() -> None:
