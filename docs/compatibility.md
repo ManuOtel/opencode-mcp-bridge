@@ -153,8 +153,8 @@ mock transport; no live V2 server run is claimed.
 | Bridge method | Verified V2 route(s) | Normalization / boundary |
 | --- | --- | --- |
 | `health` | `GET /api/health` | `{data}` envelope unwrapped. |
-| `list_providers`, `get_providers_raw` | `GET /api/provider` + `GET /api/model` + `GET /api/model/default` | Merged into legacy `{all, connected, default}`. Only id/name/modelIDs/cost/activation read; settings/headers/body never extracted. Provider counts as connected unless `activation` is `disabled`. |
-| `list_agents` | `GET /api/agent` | `{data}` unwrapped; same `{name, mode, description}` shape. No directory parameter exists, so the server default location applies. |
+| `list_providers`, `get_providers_raw` | `GET /api/provider` + `GET /api/model` + `GET /api/model/default` (each with `location[directory]` query) | Merged into legacy `{all, connected, default}`. Only id/name/modelIDs/cost/activation read; settings/headers/body never extracted. Provider counts as connected unless `activation` is `disabled`. The resolved directory (explicit arg or configured default) is sent as `location[directory]`; legacy `GET /provider` still sends no query params. |
+| `list_agents` | `GET /api/agent` (with `location[directory]` query) | `{data}` unwrapped; same `{name, mode, description}` shape. The resolved directory (explicit arg or configured default) is sent as `location[directory]` per the V2 OpenAPI deepObject contract. |
 | `create_session` | `POST /api/session` | Body `{title, location: {directory}}`; `{data: Session.Info}` returned. |
 | `prompt_async` | `POST /api/session/{id}/model` + optional `POST .../agent`, then `POST .../prompt` | Prompt body is `{text}` only, so the resolved model (bridge free-first defaults included) is always selected first; agent switch only with an explicit override. Returns `True` on admission. |
 | `get_session_status` | `GET /api/session/active` | Only running sessions are reported; each normalizes to `{type: busy}` so worker state stays `running`. Absent sessions have no entry. No idle listing exists in V2. |

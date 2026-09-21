@@ -433,13 +433,16 @@ class OpencodeClient:
             return await self.probe_capability()
         return self._capability
 
-    async def _v2_provider_snapshot(self) -> dict[str, Any]:
+    async def _v2_provider_snapshot(self, directory: str | None = None) -> dict[str, Any]:
         """Fetch V2 provider/model/default and synthesize the legacy shape.
 
         V2 splits the legacy /provider payload across three verified
         routes: GET /api/provider (Provider.Info list, no models), GET
         /api/model (Model.Info list with providerID/modelID/cost), and
-        GET /api/model/default (default Model.Info or null). This helper
+        GET /api/model/default (default Model.Info or null). Each takes
+        the documented deepObject location[directory] query parameter
+        (httpx encoding: params {"location[directory]": directory}), so
+        the resolved directory is sent instead of dropped. This helper
         merges them into {all, connected, default} so list_providers and
         get_providers_raw keep their existing return shapes.
 
@@ -448,15 +451,20 @@ class OpencodeClient:
         extracted. A provider counts as connected unless its activation
         is "disabled".
 
+        Args:
+            directory: Opencode working directory; defaults to the
+                configured default when omitted.
+
         Returns:
             Dict with all/connected/default keys, like legacy /provider.
 
         Raises:
             OpencodeError: On transport failure or unexpected envelopes.
         """
-        providers_raw = await self._request("GET", "/api/provider")
-        models_raw = await self._request("GET", "/api/model")
-        default_raw = await self._request("GET", "/api/model/default")
+        location_params = {"location[directory]": self._dir(directory)}
+        providers_raw = await self._request("GET", "/api/provider", params=location_params)
+        models_raw = await self._request("GET", "/api/model", params=location_params)
+        default_raw = await self._request("GET", "/api/model/default", params=location_params)
         providers = _require_v2_data(providers_raw, "GET", "/api/provider")
         models = _require_v2_data(models_raw, "GET", "/api/model")
         default_info = _require_v2_data(default_raw, "GET", "/api/model/default")
@@ -585,12 +593,18 @@ class OpencodeClient:
             return dict(cached)
         return cached  # type: ignore[return-value]
 
-    async def list_providers(self) -> dict[str, Any]:
+    async def list_providers(self, directory: str | None = None) -> dict[str, Any]:
         """List providers with model IDs and connected status, no secrets.
 
         In V2 mode the snapshot is synthesized from GET /api/provider,
-        GET /api/model, and GET /api/model/default; provider settings,
-        headers, and body are never extracted.
+        GET /api/model, and GET /api/model/default, each with the
+        documented location[directory] query parameter; provider
+        settings, headers, and body are never extracted. Legacy mode
+        still calls GET /provider with no query parameters.
+
+        Args:
+            directory: Opencode working directory (V2 only; legacy
+                ignores it). Defaults to the configured default.
 
         Returns:
             Dict with providers [{providerID, name, modelIDs, connected}]
@@ -598,26 +612,32 @@ class OpencodeClient:
         """
         await self._ensure_capability()
         if self._api_family == "v2":
-            return self._summarize_providers(await self._v2_provider_snapshot())
+            return self._summarize_providers(await self._v2_provider_snapshot(directory))
         data = await self._request("GET", "/provider")
         return self._summarize_providers(data)
 
     async def list_agents(self, directory: str | None = None) -> list[dict[str, Any]]:
         """List available agents.
 
-        In V2 mode GET /api/agent is used and its {data: [...]} envelope
-        is unwrapped. V2 agent listing takes no directory parameter, so
-        the server default location applies.
+        In V2 mode GET /api/agent is used with the documented
+        deepObject location[directory] query parameter (httpx encoding:
+        params {"location[directory]": directory}) and its
+        {data: [...]} envelope is unwrapped.
 
         Args:
-            directory: Opencode working directory (legacy only).
+            directory: Opencode working directory; defaults to the
+                configured default when omitted.
 
         Returns:
             Agent list with name/mode/description fields when present.
         """
         await self._ensure_capability()
         if self._api_family == "v2":
-            raw = await self._request("GET", "/api/agent")
+            raw = await self._request(
+                "GET",
+                "/api/agent",
+                params={"location[directory]": self._dir(directory)},
+            )
             data = _require_v2_data(raw, "GET", "/api/agent")
             agents = data if isinstance(data, list) else []
         else:
@@ -777,12 +797,18 @@ class OpencodeClient:
         )
         return data if isinstance(data, dict) else {}
 
-    async def get_providers_raw(self) -> dict[str, Any]:
+    async def get_providers_raw(self, directory: str | None = None) -> dict[str, Any]:
         """Get the raw /provider payload with per-model cost metadata.
 
         In V2 mode the payload is synthesized from GET /api/provider,
-        GET /api/model, and GET /api/model/default into the same
-        all/connected/default shape.
+        GET /api/model, and GET /api/model/default (each with the
+        documented location[directory] query parameter) into the same
+        all/connected/default shape. Legacy mode still calls
+        GET /provider with no query parameters.
+
+        Args:
+            directory: Opencode working directory (V2 only; legacy
+                ignores it). Defaults to the configured default.
 
         Returns:
             Raw dict with all/connected/default keys. Never exposes secrets:
@@ -790,7 +816,7 @@ class OpencodeClient:
         """
         await self._ensure_capability()
         if self._api_family == "v2":
-            return await self._v2_provider_snapshot()
+            return await self._v2_provider_snapshot(directory)
         data = await self._request("GET", "/provider")
         return data if isinstance(data, dict) else {}
 

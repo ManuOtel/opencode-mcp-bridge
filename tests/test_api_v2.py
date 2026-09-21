@@ -263,16 +263,18 @@ def test_v2_provider_envelope_normalization() -> None:
     """Provider/model/default envelopes merge into the legacy shape."""
     world = V2World()
 
-    async def run() -> tuple[dict[str, Any], dict[str, Any]]:
+    async def run() -> tuple[dict[str, Any], dict[str, Any], str]:
         client = _mock_client(world)
         try:
             await client.probe_capability()
             assert client.api_family == "v2"
-            return await client.list_providers(), await client.get_providers_raw()
+            summary = await client.list_providers("/tmp/w")
+            raw = await client.get_providers_raw("/tmp/w")
+            return summary, raw, client.default_directory
         finally:
             await client.close()
 
-    summary, raw = asyncio.run(run())
+    summary, raw, _ = asyncio.run(run())
     assert summary["providers"] == [
         {
             "providerID": "opencode",
@@ -301,6 +303,34 @@ def test_v2_provider_envelope_normalization() -> None:
     # No provider secrets leak into normalized shapes.
     assert SECRET_CANARY not in json.dumps(summary)
     assert SECRET_CANARY not in json.dumps(raw)
+    # Each snapshot route preserves location[directory] (httpx deepObject
+    # encoding: literal "location[directory]" query key).
+    for path in ("/api/provider", "/api/model", "/api/model/default"):
+        matches = [r for r in world.requests if r.url.path == path]
+        assert len(matches) == 2
+        for request in matches:
+            assert dict(request.url.params) == {"location[directory]": "/tmp/w"}
+    world.assert_allowlisted()
+
+
+def test_v2_provider_snapshot_uses_default_directory() -> None:
+    """Omitting directory still sends the configured default location."""
+    world = V2World()
+
+    async def run() -> str:
+        client = _mock_client(world)
+        try:
+            await client.probe_capability()
+            await client.list_providers()
+            return client.default_directory
+        finally:
+            await client.close()
+
+    default_dir = asyncio.run(run())
+    for path in ("/api/provider", "/api/model", "/api/model/default"):
+        matches = [r for r in world.requests if r.url.path == path]
+        assert len(matches) == 1
+        assert dict(matches[0].url.params) == {"location[directory]": default_dir}
     world.assert_allowlisted()
 
 
@@ -320,6 +350,9 @@ def test_v2_agent_envelope_normalization() -> None:
     assert agents[0] == {"name": "plan", "mode": "primary", "description": "Planner"}
     assert agents[1]["name"] == "build"
     assert len(agents[1]["description"]) == 300
+    agent_requests = [r for r in world.requests if r.url.path == "/api/agent"]
+    assert len(agent_requests) == 1
+    assert dict(agent_requests[0].url.params) == {"location[directory]": "/tmp/w"}
     world.assert_allowlisted()
 
 
