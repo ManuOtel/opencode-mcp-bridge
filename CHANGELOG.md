@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-09-21
+
+### Added
+
+- Optional OpenCode V2 capability negotiation with a conservative legacy
+  preference. The V2 probe uses the documented direct `GET /api/info`
+  `ServerInfo` shape, including required `version`, `pid`, `urls`, and
+  `paths.tmp` types, and rejects envelopes or malformed responses.
+- V2 provider, model, and agent requests use the documented
+  `location[directory]` query. V2 interrupt responses require the direct
+  `{interrupted: bool}` shape. Unsupported or malformed V2 responses fail
+  closed before further data-plane requests.
+- The worker-only `/worker-mcp` boundary, eight-tool surface, free-first
+  model policy, and explicit paid fallback remain unchanged.
+
+### Compatibility
+
+- The live OpenCode 1.18.30 deployment remains on the verified legacy
+  contract. Its V2 end-to-end compatibility is not claimed: the bridge only
+  selects V2 after the documented info shape is proven, and the current live
+  hybrid server does not provide that proof.
+- No Agent Substrate or Google AX compatibility is claimed, and no new
+  runtime dependency is required.
+
+### Security
+
+
 ## [Unreleased]
 
 ## [0.5.1] - 2026-09-16
