@@ -20,22 +20,6 @@ V2_HEALTH_PATH = "/api/health"
 PROBE_TIMEOUT_S = 5.0
 
 
-def _unwrap_envelope(payload: Any) -> Any:
-    """Unwrap a V2 {data: ...} envelope, passing other payloads through."""
-    if isinstance(payload, dict) and "data" in payload:
-        return payload["data"]
-    return payload
-
-
-def _legacy_to_v2_path(legacy_path: str) -> str:
-    """Map a legacy opencode path to its envelope-based V2 equivalent."""
-    if legacy_path == LEGACY_HEALTH_PATH:
-        return V2_HEALTH_PATH
-    if legacy_path == "/api" or legacy_path.startswith("/api/"):
-        return legacy_path
-    return "/api" + legacy_path
-
-
 class OpencodeError(RuntimeError):
     """Opencode API failure with HTTP status and a short body snippet."""
 
@@ -45,6 +29,32 @@ class OpencodeError(RuntimeError):
         self.path = path
         self.status = status
         self.snippet = snippet
+
+
+def _unwrap_envelope(payload: Any) -> Any:
+    """Unwrap a V2 {data: ...} envelope, passing other payloads through."""
+    if isinstance(payload, dict) and "data" in payload:
+        return payload["data"]
+    return payload
+
+
+def _legacy_to_v2_path(legacy_path: str) -> str:
+    """Map the legacy health path to its V2 equivalent.
+
+    Only /global/health has a verified V2 equivalent (/api/health).
+    Worker lifecycle paths (e.g. /session, /provider, /agent, prompt_async)
+    have no verified V2 mapping: the live V2 schema uses
+    /api/session/{sessionID}/prompt (not prompt_async) and different
+    status/messages/abort/delete contracts.
+    """
+    if legacy_path == LEGACY_HEALTH_PATH:
+        return V2_HEALTH_PATH
+    raise OpencodeError(
+        "GET",
+        legacy_path,
+        0,
+        "V2 lifecycle adapter is not verified yet: no verified V2 path",
+    )
 
 
 def extract_text(parts: list[dict[str, Any]], max_chars: int = 20000) -> str:
@@ -316,20 +326,30 @@ class OpencodeClient:
         """Send one request via the negotiated route family.
 
         In legacy mode (default) the proven path is used unchanged. In V2
-        mode the documented /api path is used and a {data: ...} envelope
-        is unwrapped. A V2 response that cannot be unwrapped into a usable
-        payload fails closed with OpencodeError instead of faking success.
+        mode only the health probe is supported: GET /global/health is
+        served from GET /api/health with its {data: ...} envelope unwrapped.
+        Every other V2 lifecycle/data-plane call fails closed with
+        OpencodeError and never sends a guessed path (notably never a
+        guessed prompt_async path) because the V2 session lifecycle
+        (prompt, status, messages, abort, delete) is not verified yet.
         """
         if self._api_family != "v2":
             return await self._request(method, legacy_path, params=params, body=body)
-        v2_path = _legacy_to_v2_path(legacy_path)
-        data = await self._request(method, v2_path, params=params, body=body)
-        if data is True:
-            return True
-        unwrapped = _unwrap_envelope(data)
-        if unwrapped is None:
-            raise OpencodeError(method, v2_path, 200, "unsupported V2 envelope payload")
-        return unwrapped
+        if legacy_path == LEGACY_HEALTH_PATH:
+            data = await self._request(method, V2_HEALTH_PATH, params=params, body=body)
+            if data is True:
+                return True
+            unwrapped = _unwrap_envelope(data)
+            if not isinstance(unwrapped, dict):
+                raise OpencodeError(method, V2_HEALTH_PATH, 200, "unsupported V2 envelope payload")
+            return unwrapped
+        raise OpencodeError(
+            method,
+            legacy_path,
+            0,
+            "V2 lifecycle adapter is not verified yet: "
+            "worker lifecycle/data-plane calls require the legacy family",
+        )
 
     async def health(self) -> dict[str, Any]:
         """Get server health and version.

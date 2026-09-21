@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -72,7 +71,11 @@ def test_legacy_preferred_when_both_families_exist() -> None:
 
 
 def test_v2_selected_when_legacy_health_absent() -> None:
-    """V2 fallback engages only when legacy health is absent."""
+    """V2 fallback engages only when legacy health is absent.
+
+    Health reporting works via the verified /api/health envelope, but
+    worker lifecycle calls fail closed without sending guessed V2 paths.
+    """
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -83,32 +86,31 @@ def test_v2_selected_when_legacy_health_absent() -> None:
             return httpx.Response(
                 200, json={"data": {"healthy": True, "version": "2.0.0"}}, request=request
             )
-        if request.url.path == "/api/session":
-            return httpx.Response(
-                200, json={"data": {"id": "ses_v2", "title": "t"}}, request=request
-            )
         raise AssertionError(f"unexpected path {request.url.path}")
 
     async def run() -> tuple[dict[str, Any], dict[str, Any], str | None]:
         client = _mock_client(handler)
         try:
             cap = await client.probe_capability()
-            session = await client.create_session("t", "/tmp/w")
-            return cap, session, client.server_version
+            health = await client.health()
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.create_session("t", "/tmp/w")
+            return cap, health, client.server_version
         finally:
             await client.close()
 
-    cap, session, version = asyncio.run(run())
+    cap, health, version = asyncio.run(run())
     assert cap["family"] == "v2"
     assert cap["legacy_available"] is False
     assert cap["v2_available"] is True
     assert version == "2.0.0"
-    assert session == {"id": "ses_v2", "title": "t"}
-    assert "/api/session" in seen
+    assert health == {"healthy": True, "version": "2.0.0"}
+    assert "/api/session" not in seen
+    assert seen.count("/api/health") == 2
 
 
-def test_v2_envelopes_unwrapped_for_worker_lifecycle() -> None:
-    """V2 worker lifecycle unwraps {data: ...} without changing payloads."""
+def test_v2_lifecycle_fails_closed_without_guessed_paths() -> None:
+    """V2 worker lifecycle fails closed; only the health envelope is used."""
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -118,97 +120,68 @@ def test_v2_envelopes_unwrapped_for_worker_lifecycle() -> None:
             return httpx.Response(404, json={}, request=request)
         if path == "/api/health":
             return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
-        if path == "/api/provider":
-            return httpx.Response(
-                200,
-                json={"data": {"all": [], "connected": [], "default": {}}},
-                request=request,
-            )
-        if path == "/api/session/status":
-            return httpx.Response(200, json={"data": {"ses_1": {"type": "idle"}}}, request=request)
-        if path == "/api/session/ses_1/message" and request.method == "GET":
-            return httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {
-                            "info": {"id": "m1", "role": "assistant", "time": {}},
-                            "parts": [{"type": "text", "text": "done"}],
-                        }
-                    ]
-                },
-                request=request,
-            )
-        if path == "/api/session/ses_1/abort":
-            return httpx.Response(200, json={"data": {"aborted": True}}, request=request)
-        if path == "/api/session/ses_1" and request.method == "DELETE":
-            return httpx.Response(200, json={"data": True}, request=request)
         raise AssertionError(f"unexpected {request.method} {path}")
 
-    async def run() -> dict[str, Any]:
+    async def run() -> None:
         client = _mock_client(handler)
         try:
             await client.probe_capability()
             assert client.api_family == "v2"
-            providers = await client.list_providers()
-            status = await client.get_session_status("/tmp/w")
-            messages = await client.list_messages("ses_1", "/tmp/w")
-            aborted = await client.abort_session("ses_1", "/tmp/w")
-            deleted = await client.delete_session("ses_1", "/tmp/w")
-            return {
-                "providers": providers,
-                "status": status,
-                "messages": messages,
-                "aborted": aborted,
-                "deleted": deleted,
-            }
+            health = await client.health()
+            assert health == {"healthy": True}
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.list_providers()
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.get_session_status("/tmp/w")
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.list_messages("ses_1", "/tmp/w")
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.abort_session("ses_1", "/tmp/w")
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.delete_session("ses_1", "/tmp/w")
         finally:
             await client.close()
 
-    result = asyncio.run(run())
-    assert result["providers"] == {"providers": [], "default": {}}
-    assert result["status"] == {"ses_1": {"type": "idle"}}
-    assert result["messages"] == [{"id": "m1", "role": "assistant", "text": "done", "time": {}}]
-    assert result["aborted"] is True
-    assert result["deleted"] is True
+    asyncio.run(run())
     paths = [r.url.path for r in requests]
-    assert all(p == "/global/health" or p.startswith("/api/") for p in paths[1:])
+    assert paths == ["/global/health", "/api/health", "/api/health"]
 
 
-def test_v2_prompt_keeps_explicit_model_pair() -> None:
-    """V2 prompt_async sends the same explicit provider/model contract."""
+def test_v2_prompt_async_never_sends_guessed_path() -> None:
+    """V2 prompt_async fails closed instead of guessing prompt_async/prompt."""
+    seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
         if request.url.path == "/api/health":
             return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
-        if request.url.path == "/api/session/ses_x/prompt_async":
-            assert json.loads(request.content) == {
-                "parts": [{"type": "text", "text": "hi"}],
-                "model": {"providerID": "acme", "modelID": "m-1"},
-                "agent": "plan",
-            }
-            assert dict(request.url.params) == {"directory": "/tmp/w"}
-            return httpx.Response(204, request=request)
         raise AssertionError(f"unexpected {request.url.path}")
 
-    async def run() -> bool:
+    async def run() -> None:
         client = _mock_client(handler)
         try:
             await client.probe_capability()
-            return await client.prompt_async(
-                "ses_x",
-                "hi",
-                provider_id="acme",
-                model_id="m-1",
-                agent="plan",
-                directory="/tmp/w",
-            )
+            assert client.api_family == "v2"
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.prompt_async(
+                    "ses_x",
+                    "hi",
+                    provider_id="acme",
+                    model_id="m-1",
+                    agent="plan",
+                    directory="/tmp/w",
+                )
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.send_message("ses_x", "hi", directory="/tmp/w")
         finally:
             await client.close()
 
-    assert asyncio.run(run()) is True
+    asyncio.run(run())
+    assert seen == ["/global/health", "/api/health"]
+    assert not any("prompt_async" in path for path in seen)
+    assert not any(path.startswith("/api/session") for path in seen)
 
 
 def test_unsupported_capability_fails_closed() -> None:
@@ -256,28 +229,33 @@ def test_incomplete_v2_payload_fails_closed() -> None:
     asyncio.run(run())
 
 
-def test_v2_null_envelope_on_operation_fails_closed() -> None:
-    """A null V2 operation envelope raises instead of returning fake data."""
+def test_v2_lifecycle_blocked_before_any_guessed_request() -> None:
+    """V2 lifecycle raises before sending any guessed session/provider path."""
+    seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
         if request.url.path == "/api/health":
             return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
-        if request.url.path == "/api/session/ses_1/abort":
-            return httpx.Response(200, json={"data": None}, request=request)
         raise AssertionError(f"unexpected {request.url.path}")
 
     async def run() -> None:
         client = _mock_client(handler)
         try:
             await client.probe_capability()
-            with pytest.raises(OpencodeError, match="unsupported V2 envelope"):
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
                 await client.abort_session("ses_1", "/tmp/w")
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.list_sessions("/tmp/w")
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.get_diff("ses_1", directory="/tmp/w")
         finally:
             await client.close()
 
     asyncio.run(run())
+    assert seen == ["/global/health", "/api/health"]
 
 
 def test_probe_is_bounded_cached_and_redacted() -> None:
@@ -344,5 +322,7 @@ def test_public_tool_catalog_and_boundaries_unchanged() -> None:
     assert _unwrap_envelope({"data": {"a": 1}}) == {"a": 1}
     assert _unwrap_envelope([1, 2]) == [1, 2]
     assert _legacy_to_v2_path("/global/health") == "/api/health"
-    assert _legacy_to_v2_path("/session/ses_1/abort") == "/api/session/ses_1/abort"
-    assert _legacy_to_v2_path("/provider") == "/api/provider"
+    with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+        _legacy_to_v2_path("/session/ses_1/abort")
+    with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+        _legacy_to_v2_path("/provider")
