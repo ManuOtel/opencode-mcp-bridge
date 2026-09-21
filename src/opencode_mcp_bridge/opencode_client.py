@@ -138,6 +138,7 @@ class OpencodeClient:
         self._api_family: str = "legacy"
         self._server_version: str | None = None
         self._capability: dict[str, Any] | None = None
+        self._health_cache: dict[str, Any] | bool | None = None
 
     async def close(self) -> None:
         """Close the underlying HTTP connection pool."""
@@ -286,6 +287,7 @@ class OpencodeClient:
             version = legacy.get("version") if isinstance(legacy, dict) else None
             self._api_family = "legacy"
             self._server_version = version if isinstance(version, str) else None
+            self._health_cache = dict(legacy) if isinstance(legacy, dict) else legacy
             self._capability = {
                 "family": "legacy",
                 "version": self._server_version,
@@ -308,12 +310,19 @@ class OpencodeClient:
         version = v2_data.get("version")
         self._api_family = "v2"
         self._server_version = version if isinstance(version, str) else None
+        self._health_cache = dict(v2_data)
         self._capability = {
             "family": "v2",
             "version": self._server_version,
             "legacy_available": False,
             "v2_available": True,
         }
+        return self._capability
+
+    async def _ensure_capability(self) -> dict[str, Any]:
+        """Probe once on first normal use; later calls reuse the cache."""
+        if self._capability is None:
+            return await self.probe_capability()
         return self._capability
 
     async def _request_routed(
@@ -325,14 +334,22 @@ class OpencodeClient:
     ) -> Any:
         """Send one request via the negotiated route family.
 
-        In legacy mode (default) the proven path is used unchanged. In V2
-        mode only the health probe is supported: GET /global/health is
-        served from GET /api/health with its {data: ...} envelope unwrapped.
-        Every other V2 lifecycle/data-plane call fails closed with
+        The first normal call auto-probes capability before routing, so
+        callers never need to invoke probe_capability() explicitly. Health
+        is served from the verified probe payload (no duplicate health
+        traffic); explicit refresh goes via probe_capability(force_refresh)
+        or health(force_refresh=True). In V2 mode only health is supported:
+        every other lifecycle/data-plane call fails closed with
         OpencodeError and never sends a guessed path (notably never a
         guessed prompt_async path) because the V2 session lifecycle
         (prompt, status, messages, abort, delete) is not verified yet.
         """
+        await self._ensure_capability()
+        if legacy_path == LEGACY_HEALTH_PATH and self._health_cache is not None:
+            cached = self._health_cache
+            if isinstance(cached, dict):
+                return dict(cached)
+            return cached
         if self._api_family != "v2":
             return await self._request(method, legacy_path, params=params, body=body)
         if legacy_path == LEGACY_HEALTH_PATH:
@@ -351,13 +368,27 @@ class OpencodeClient:
             "worker lifecycle/data-plane calls require the legacy family",
         )
 
-    async def health(self) -> dict[str, Any]:
+    async def health(self, force_refresh: bool = False) -> dict[str, Any]:
         """Get server health and version.
+
+        Auto-probes on first use, then returns the cached verified probe
+        payload without duplicate health traffic. Only an explicit
+        force_refresh re-probes.
+
+        Args:
+            force_refresh: Re-probe even when a cached payload exists.
 
         Returns:
             Dict like {healthy: True, version: str}.
         """
-        return await self._request_routed("GET", "/global/health")
+        if force_refresh:
+            await self.probe_capability(force_refresh=True)
+        else:
+            await self._ensure_capability()
+        cached = self._health_cache
+        if isinstance(cached, dict):
+            return dict(cached)
+        return cached  # type: ignore[return-value]
 
     async def list_providers(self) -> dict[str, Any]:
         """List providers with model IDs and connected status, no secrets.

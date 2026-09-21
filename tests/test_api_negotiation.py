@@ -106,7 +106,7 @@ def test_v2_selected_when_legacy_health_absent() -> None:
     assert version == "2.0.0"
     assert health == {"healthy": True, "version": "2.0.0"}
     assert "/api/session" not in seen
-    assert seen.count("/api/health") == 2
+    assert seen.count("/api/health") == 1
 
 
 def test_v2_lifecycle_fails_closed_without_guessed_paths() -> None:
@@ -144,7 +144,7 @@ def test_v2_lifecycle_fails_closed_without_guessed_paths() -> None:
 
     asyncio.run(run())
     paths = [r.url.path for r in requests]
-    assert paths == ["/global/health", "/api/health", "/api/health"]
+    assert paths == ["/global/health", "/api/health"]
 
 
 def test_v2_prompt_async_never_sends_guessed_path() -> None:
@@ -326,3 +326,171 @@ def test_public_tool_catalog_and_boundaries_unchanged() -> None:
         _legacy_to_v2_path("/session/ses_1/abort")
     with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
         _legacy_to_v2_path("/provider")
+
+
+def test_first_non_health_call_auto_probes_then_uses_legacy() -> None:
+    """First normal call auto-probes (legacy first) then uses legacy path."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/global/health":
+            return httpx.Response(
+                200, json={"healthy": True, "version": "1.18.30"}, request=request
+            )
+        if request.url.path == "/provider":
+            return httpx.Response(
+                200,
+                json={"all": [], "connected": [], "default": {}},
+                request=request,
+            )
+        raise AssertionError(f"unexpected {request.url.path}")
+
+    async def run() -> tuple[dict[str, Any], dict[str, Any]]:
+        client = _mock_client(handler)
+        try:
+            providers = await client.list_providers()
+            return providers, dict(client.capability or {})
+        finally:
+            await client.close()
+
+    providers, cap = asyncio.run(run())
+    assert cap["family"] == "legacy"
+    assert providers == {"providers": [], "default": {}}
+    assert seen == ["/global/health", "/provider"]
+    assert "/api/health" not in seen
+
+
+def test_health_uses_cached_probe_without_duplicate() -> None:
+    """Two health() calls cost one probe; readiness-style reuse is free."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        assert request.url.path == "/global/health"
+        return httpx.Response(200, json={"healthy": True, "version": "1.18.30"}, request=request)
+
+    async def run() -> tuple[dict[str, Any], dict[str, Any]]:
+        client = _mock_client(handler)
+        try:
+            first = await client.health()
+            second = await client.health()
+            return first, second
+        finally:
+            await client.close()
+
+    first, second = asyncio.run(run())
+    assert first == {"healthy": True, "version": "1.18.30"}
+    assert second == first
+    assert seen == ["/global/health"]
+
+
+def test_v2_health_only_auto_probe_still_fails_closed() -> None:
+    """Auto-probe V2 health-only: health works, lifecycle fails before HTTP."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/global/health":
+            return httpx.Response(404, json={}, request=request)
+        if request.url.path == "/api/health":
+            return httpx.Response(
+                200,
+                json={"data": {"healthy": True, "version": "2.0.0"}},
+                request=request,
+            )
+        raise AssertionError(f"unexpected {request.url.path}")
+
+    async def run() -> tuple[dict[str, Any], str]:
+        client = _mock_client(handler)
+        try:
+            health = await client.health()
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.create_session("t", "/tmp/w")
+            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                await client.prompt_async("ses_x", "hi", directory="/tmp/w")
+            return health, client.api_family
+        finally:
+            await client.close()
+
+    health, family = asyncio.run(run())
+    assert family == "v2"
+    assert health == {"healthy": True, "version": "2.0.0"}
+    assert seen == ["/global/health", "/api/health"]
+    assert not any("prompt_async" in p for p in seen)
+    assert not any(p.startswith("/api/session") for p in seen)
+
+
+def test_repeated_calls_use_cached_capability() -> None:
+    """Second normal call reuses capability with no extra health traffic."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/global/health":
+            return httpx.Response(
+                200, json={"healthy": True, "version": "1.18.30"}, request=request
+            )
+        if request.url.path == "/provider":
+            return httpx.Response(
+                200,
+                json={"all": [], "connected": [], "default": {}},
+                request=request,
+            )
+        raise AssertionError(f"unexpected {request.url.path}")
+
+    async def run() -> None:
+        client = _mock_client(handler)
+        try:
+            await client.list_providers()
+            first_cap = client.capability
+            await client.list_providers()
+            assert client.capability is first_cap
+            await client.health()
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+    assert seen.count("/global/health") == 1
+    assert seen.count("/provider") == 2
+
+
+def test_force_refresh_is_only_reprobe_path() -> None:
+    """Normal repeats never re-probe; only explicit force_refresh does."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/global/health":
+            return httpx.Response(
+                200, json={"healthy": True, "version": "1.18.30"}, request=request
+            )
+        if request.url.path == "/provider":
+            return httpx.Response(
+                200,
+                json={"all": [], "connected": [], "default": {}},
+                request=request,
+            )
+        raise AssertionError(f"unexpected {request.url.path}")
+
+    async def run() -> list[int]:
+        client = _mock_client(handler)
+        counts: list[int] = []
+        try:
+            await client.health()
+            counts.append(seen.count("/global/health"))
+            await client.health()
+            counts.append(seen.count("/global/health"))
+            await client.list_providers()
+            counts.append(seen.count("/global/health"))
+            await client.probe_capability()
+            counts.append(seen.count("/global/health"))
+            await client.probe_capability(force_refresh=True)
+            counts.append(seen.count("/global/health"))
+            await client.health(force_refresh=True)
+            counts.append(seen.count("/global/health"))
+            return counts
+        finally:
+            await client.close()
+
+    assert asyncio.run(run()) == [1, 1, 1, 1, 2, 3]
