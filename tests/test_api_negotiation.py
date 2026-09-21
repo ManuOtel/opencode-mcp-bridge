@@ -73,8 +73,8 @@ def test_legacy_preferred_when_both_families_exist() -> None:
 def test_v2_selected_when_legacy_health_absent() -> None:
     """V2 fallback engages only when legacy health is absent.
 
-    Health reporting works via the verified /api/health envelope, but
-    worker lifecycle calls fail closed without sending guessed V2 paths.
+    Health reporting works via the verified /api/health envelope, and
+    session creation routes to the verified POST /api/session contract.
     """
     seen: list[str] = []
 
@@ -86,31 +86,38 @@ def test_v2_selected_when_legacy_health_absent() -> None:
             return httpx.Response(
                 200, json={"data": {"healthy": True, "version": "2.0.0"}}, request=request
             )
+        if request.url.path == "/api/session":
+            return httpx.Response(
+                200,
+                json={"data": {"id": "ses_1", "location": {"directory": "/tmp/w"}}},
+                request=request,
+            )
         raise AssertionError(f"unexpected path {request.url.path}")
 
-    async def run() -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    async def run() -> tuple[dict[str, Any], dict[str, Any], str | None, dict[str, Any]]:
         client = _mock_client(handler)
         try:
             cap = await client.probe_capability()
             health = await client.health()
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.create_session("t", "/tmp/w")
-            return cap, health, client.server_version
+            session = await client.create_session("t", "/tmp/w")
+            return cap, health, client.server_version, session
         finally:
             await client.close()
 
-    cap, health, version = asyncio.run(run())
+    cap, health, version, session = asyncio.run(run())
     assert cap["family"] == "v2"
     assert cap["legacy_available"] is False
     assert cap["v2_available"] is True
     assert version == "2.0.0"
     assert health == {"healthy": True, "version": "2.0.0"}
-    assert "/api/session" not in seen
+    assert session["id"] == "ses_1"
     assert seen.count("/api/health") == 1
+    assert "/session" not in seen
+    assert not any("prompt_async" in path for path in seen)
 
 
-def test_v2_lifecycle_fails_closed_without_guessed_paths() -> None:
-    """V2 worker lifecycle fails closed; only the health envelope is used."""
+def test_v2_lifecycle_uses_verified_routes() -> None:
+    """V2 worker lifecycle uses verified /api routes, never guessed paths."""
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -120,6 +127,32 @@ def test_v2_lifecycle_fails_closed_without_guessed_paths() -> None:
             return httpx.Response(404, json={}, request=request)
         if path == "/api/health":
             return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
+        if path == "/api/provider":
+            return httpx.Response(
+                200,
+                json={"location": {"directory": "/tmp/w"}, "data": []},
+                request=request,
+            )
+        if path == "/api/model":
+            return httpx.Response(
+                200,
+                json={"location": {"directory": "/tmp/w"}, "data": []},
+                request=request,
+            )
+        if path == "/api/model/default":
+            return httpx.Response(
+                200,
+                json={"location": {"directory": "/tmp/w"}, "data": None},
+                request=request,
+            )
+        if path == "/api/session/active":
+            return httpx.Response(200, json={"data": {}}, request=request)
+        if path == "/api/session/ses_1/message":
+            return httpx.Response(200, json={"data": [], "cursor": {}}, request=request)
+        if path == "/api/session/ses_1/interrupt":
+            return httpx.Response(200, json={"data": {"interrupted": True}}, request=request)
+        if path == "/api/session/ses_1" and request.method == "DELETE":
+            return httpx.Response(204, request=request)
         raise AssertionError(f"unexpected {request.method} {path}")
 
     async def run() -> None:
@@ -129,34 +162,49 @@ def test_v2_lifecycle_fails_closed_without_guessed_paths() -> None:
             assert client.api_family == "v2"
             health = await client.health()
             assert health == {"healthy": True}
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.list_providers()
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.get_session_status("/tmp/w")
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.list_messages("ses_1", "/tmp/w")
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.abort_session("ses_1", "/tmp/w")
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.delete_session("ses_1", "/tmp/w")
+            providers = await client.list_providers()
+            assert providers == {"providers": [], "default": {}}
+            assert await client.get_session_status("/tmp/w") == {}
+            assert await client.list_messages("ses_1", "/tmp/w") == []
+            assert await client.abort_session("ses_1", "/tmp/w") is True
+            assert await client.delete_session("ses_1", "/tmp/w") is True
+            # Sync send_message has no verified V2 mapping and fails closed.
+            with pytest.raises(OpencodeError, match="no verified sync-reply mapping"):
+                await client.send_message("ses_1", "hi", directory="/tmp/w")
         finally:
             await client.close()
 
     asyncio.run(run())
     paths = [r.url.path for r in requests]
-    assert paths == ["/global/health", "/api/health"]
+    assert paths[:2] == ["/global/health", "/api/health"]
+    assert not any("prompt_async" in path for path in paths)
+    assert not any(path == "/session/status" for path in paths)
+    assert not any(path.startswith("/session/") for path in paths)
+    assert not any(path in ("/provider", "/agent") for path in paths)
 
 
-def test_v2_prompt_async_never_sends_guessed_path() -> None:
-    """V2 prompt_async fails closed instead of guessing prompt_async/prompt."""
-    seen: list[str] = []
+def test_v2_prompt_uses_verified_prompt_route() -> None:
+    """V2 prompt_async uses model/agent switches plus POST .../prompt."""
+    seen: list[tuple[str, str]] = []
+    bodies: list[Any] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.url.path)
+        seen.append((request.method, request.url.path))
+        bodies.append(request.content.decode() if request.content else "")
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
         if request.url.path == "/api/health":
             return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
+        if request.url.path == "/api/session/ses_x/model":
+            return httpx.Response(204, request=request)
+        if request.url.path == "/api/session/ses_x/agent":
+            return httpx.Response(204, request=request)
+        if request.url.path == "/api/session/ses_x/prompt":
+            return httpx.Response(
+                200,
+                json={"data": {"id": "msg_1", "sessionID": "ses_x"}},
+                request=request,
+            )
         raise AssertionError(f"unexpected {request.url.path}")
 
     async def run() -> None:
@@ -164,7 +212,7 @@ def test_v2_prompt_async_never_sends_guessed_path() -> None:
         try:
             await client.probe_capability()
             assert client.api_family == "v2"
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+            assert (
                 await client.prompt_async(
                     "ses_x",
                     "hi",
@@ -173,15 +221,22 @@ def test_v2_prompt_async_never_sends_guessed_path() -> None:
                     agent="plan",
                     directory="/tmp/w",
                 )
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
+                is True
+            )
+            # Sync send_message still fails closed before any V2 request.
+            with pytest.raises(OpencodeError, match="no verified sync-reply mapping"):
                 await client.send_message("ses_x", "hi", directory="/tmp/w")
         finally:
             await client.close()
 
     asyncio.run(run())
-    assert seen == ["/global/health", "/api/health"]
-    assert not any("prompt_async" in path for path in seen)
-    assert not any(path.startswith("/api/session") for path in seen)
+    assert seen[:2] == [("GET", "/global/health"), ("GET", "/api/health")]
+    assert ("POST", "/api/session/ses_x/model") in seen
+    assert ("POST", "/api/session/ses_x/agent") in seen
+    assert ("POST", "/api/session/ses_x/prompt") in seen
+    paths = [path for _, path in seen]
+    assert not any("prompt_async" in path for path in paths)
+    assert not any(path.startswith("/session/") for path in paths)
 
 
 def test_unsupported_capability_fails_closed() -> None:
@@ -229,33 +284,42 @@ def test_incomplete_v2_payload_fails_closed() -> None:
     asyncio.run(run())
 
 
-def test_v2_lifecycle_blocked_before_any_guessed_request() -> None:
-    """V2 lifecycle raises before sending any guessed session/provider path."""
-    seen: list[str] = []
+def test_v2_session_reads_use_verified_routes() -> None:
+    """V2 abort/list_sessions/get_diff use verified /api routes only."""
+    seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.url.path)
+        seen.append((request.method, request.url.path))
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
         if request.url.path == "/api/health":
             return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
+        if request.url.path == "/api/session/ses_1/interrupt":
+            return httpx.Response(200, json={"data": {"interrupted": True}}, request=request)
+        if request.url.path == "/api/session":
+            return httpx.Response(200, json={"data": [], "cursor": {}}, request=request)
+        if request.url.path == "/api/session/ses_1/diff":
+            return httpx.Response(200, json={"data": []}, request=request)
         raise AssertionError(f"unexpected {request.url.path}")
 
     async def run() -> None:
         client = _mock_client(handler)
         try:
             await client.probe_capability()
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.abort_session("ses_1", "/tmp/w")
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.list_sessions("/tmp/w")
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.get_diff("ses_1", directory="/tmp/w")
+            assert await client.abort_session("ses_1", "/tmp/w") is True
+            assert await client.list_sessions("/tmp/w") == []
+            assert await client.get_diff("ses_1", directory="/tmp/w") == []
         finally:
             await client.close()
 
     asyncio.run(run())
-    assert seen == ["/global/health", "/api/health"]
+    assert seen[:2] == [("GET", "/global/health"), ("GET", "/api/health")]
+    assert ("POST", "/api/session/ses_1/interrupt") in seen
+    assert ("GET", "/api/session") in seen
+    assert ("GET", "/api/session/ses_1/diff") in seen
+    paths = [path for _, path in seen]
+    assert not any("prompt_async" in path for path in paths)
+    assert not any(path.startswith("/session/") for path in paths)
 
 
 def test_probe_is_bounded_cached_and_redacted() -> None:
@@ -385,12 +449,12 @@ def test_health_uses_cached_probe_without_duplicate() -> None:
     assert seen == ["/global/health"]
 
 
-def test_v2_health_only_auto_probe_still_fails_closed() -> None:
-    """Auto-probe V2 health-only: health works, lifecycle fails before HTTP."""
-    seen: list[str] = []
+def test_v2_health_only_auto_probe_routes_verified_calls() -> None:
+    """Auto-probe V2: health works, data plane uses verified routes."""
+    seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.url.path)
+        seen.append((request.method, request.url.path))
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
         if request.url.path == "/api/health":
@@ -399,16 +463,30 @@ def test_v2_health_only_auto_probe_still_fails_closed() -> None:
                 json={"data": {"healthy": True, "version": "2.0.0"}},
                 request=request,
             )
+        if request.url.path == "/api/session":
+            return httpx.Response(
+                200,
+                json={"data": {"id": "ses_9", "location": {"directory": "/tmp/w"}}},
+                request=request,
+            )
+        if request.url.path == "/api/session/ses_x/model":
+            return httpx.Response(204, request=request)
+        if request.url.path == "/api/session/ses_x/prompt":
+            return httpx.Response(
+                200, json={"data": {"id": "msg_2", "sessionID": "ses_x"}}, request=request
+            )
         raise AssertionError(f"unexpected {request.url.path}")
 
     async def run() -> tuple[dict[str, Any], str]:
         client = _mock_client(handler)
         try:
             health = await client.health()
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.create_session("t", "/tmp/w")
-            with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
-                await client.prompt_async("ses_x", "hi", directory="/tmp/w")
+            session = await client.create_session("t", "/tmp/w")
+            assert session["id"] == "ses_9"
+            assert await client.prompt_async("ses_x", "hi", directory="/tmp/w") is True
+            # Only sync send_message still fails closed, before any HTTP.
+            with pytest.raises(OpencodeError, match="no verified sync-reply mapping"):
+                await client.send_message("ses_x", "hi", directory="/tmp/w")
             return health, client.api_family
         finally:
             await client.close()
@@ -416,9 +494,10 @@ def test_v2_health_only_auto_probe_still_fails_closed() -> None:
     health, family = asyncio.run(run())
     assert family == "v2"
     assert health == {"healthy": True, "version": "2.0.0"}
-    assert seen == ["/global/health", "/api/health"]
-    assert not any("prompt_async" in p for p in seen)
-    assert not any(p.startswith("/api/session") for p in seen)
+    paths = [path for _, path in seen]
+    assert paths[:2] == ["/global/health", "/api/health"]
+    assert not any("prompt_async" in p for p in paths)
+    assert not any(p.startswith("/session/") for p in paths)
 
 
 def test_repeated_calls_use_cached_capability() -> None:
