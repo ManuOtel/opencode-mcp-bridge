@@ -20,6 +20,15 @@ from opencode_mcp_bridge.opencode_client import (
     _unwrap_envelope,
 )
 
+# Direct ServerInfo shape per the official V2 OpenAPI (GET /api/info):
+# no {data} envelope, no healthy field.
+V2_INFO = {
+    "version": "2.0.0",
+    "pid": 123,
+    "urls": ["http://127.0.0.1:4096"],
+    "paths": {"tmp": "/tmp"},
+}
+
 
 def _mock_client(handler: Any) -> OpencodeClient:
     """Build a client backed by a mock transport."""
@@ -31,7 +40,7 @@ def _mock_client(handler: Any) -> OpencodeClient:
 
 
 def test_legacy_preferred_when_both_families_exist() -> None:
-    """Legacy wins when /global/health works, even if /api/health exists."""
+    """Legacy wins when /global/health works, even if /api/info exists."""
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -40,10 +49,8 @@ def test_legacy_preferred_when_both_families_exist() -> None:
             return httpx.Response(
                 200, json={"healthy": True, "version": "1.18.30"}, request=request
             )
-        if request.url.path == "/api/health":
-            return httpx.Response(
-                200, json={"data": {"healthy": True, "version": "2.0.0"}}, request=request
-            )
+        if request.url.path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
         if request.url.path.endswith("/prompt_async"):
             return httpx.Response(204, request=request)
         raise AssertionError(f"unexpected path {request.url.path}")
@@ -63,7 +70,7 @@ def test_legacy_preferred_when_both_families_exist() -> None:
     assert cap["family"] == "legacy"
     assert cap["version"] == "1.18.30"
     assert cap["legacy_available"] is True
-    assert "/api/health" not in seen, "legacy must win without probing V2"
+    assert "/api/info" not in seen, "legacy must win without probing V2"
     assert is_cached is True
     assert count_before_cache == len([p for p in seen if p == "/global/health"]) == 1
     assert prompt_ok is True
@@ -73,8 +80,9 @@ def test_legacy_preferred_when_both_families_exist() -> None:
 def test_v2_selected_when_legacy_health_absent() -> None:
     """V2 fallback engages only when legacy health is absent.
 
-    Health reporting works via the verified /api/health envelope, and
-    session creation routes to the verified POST /api/session contract.
+    Health reporting works via the direct GET /api/info ServerInfo
+    (no envelope, no healthy field), and session creation routes to
+    the verified POST /api/session contract.
     """
     seen: list[str] = []
 
@@ -82,10 +90,8 @@ def test_v2_selected_when_legacy_health_absent() -> None:
         seen.append(request.url.path)
         if request.url.path == "/global/health":
             return httpx.Response(404, json={"error": "not found"}, request=request)
-        if request.url.path == "/api/health":
-            return httpx.Response(
-                200, json={"data": {"healthy": True, "version": "2.0.0"}}, request=request
-            )
+        if request.url.path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
         if request.url.path == "/api/session":
             return httpx.Response(
                 200,
@@ -109,9 +115,9 @@ def test_v2_selected_when_legacy_health_absent() -> None:
     assert cap["legacy_available"] is False
     assert cap["v2_available"] is True
     assert version == "2.0.0"
-    assert health == {"healthy": True, "version": "2.0.0"}
+    assert health == V2_INFO
     assert session["id"] == "ses_1"
-    assert seen.count("/api/health") == 1
+    assert seen.count("/api/info") == 1
     assert "/session" not in seen
     assert not any("prompt_async" in path for path in seen)
 
@@ -125,8 +131,8 @@ def test_v2_lifecycle_uses_verified_routes() -> None:
         path = request.url.path
         if path == "/global/health":
             return httpx.Response(404, json={}, request=request)
-        if path == "/api/health":
-            return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
+        if path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
         if path == "/api/provider":
             return httpx.Response(
                 200,
@@ -150,7 +156,7 @@ def test_v2_lifecycle_uses_verified_routes() -> None:
         if path == "/api/session/ses_1/message":
             return httpx.Response(200, json={"data": [], "cursor": {}}, request=request)
         if path == "/api/session/ses_1/interrupt":
-            return httpx.Response(200, json={"data": {"interrupted": True}}, request=request)
+            return httpx.Response(200, json={"interrupted": True}, request=request)
         if path == "/api/session/ses_1" and request.method == "DELETE":
             return httpx.Response(204, request=request)
         raise AssertionError(f"unexpected {request.method} {path}")
@@ -161,7 +167,7 @@ def test_v2_lifecycle_uses_verified_routes() -> None:
             await client.probe_capability()
             assert client.api_family == "v2"
             health = await client.health()
-            assert health == {"healthy": True}
+            assert health == V2_INFO
             providers = await client.list_providers()
             assert providers == {"providers": [], "default": {}}
             assert await client.get_session_status("/tmp/w") == {}
@@ -176,7 +182,7 @@ def test_v2_lifecycle_uses_verified_routes() -> None:
 
     asyncio.run(run())
     paths = [r.url.path for r in requests]
-    assert paths[:2] == ["/global/health", "/api/health"]
+    assert paths[:2] == ["/global/health", "/api/info"]
     assert not any("prompt_async" in path for path in paths)
     assert not any(path == "/session/status" for path in paths)
     assert not any(path.startswith("/session/") for path in paths)
@@ -193,8 +199,8 @@ def test_v2_prompt_uses_verified_prompt_route() -> None:
         bodies.append(request.content.decode() if request.content else "")
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
-        if request.url.path == "/api/health":
-            return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
+        if request.url.path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
         if request.url.path == "/api/session/ses_x/model":
             return httpx.Response(204, request=request)
         if request.url.path == "/api/session/ses_x/agent":
@@ -230,7 +236,7 @@ def test_v2_prompt_uses_verified_prompt_route() -> None:
             await client.close()
 
     asyncio.run(run())
-    assert seen[:2] == [("GET", "/global/health"), ("GET", "/api/health")]
+    assert seen[:2] == [("GET", "/global/health"), ("GET", "/api/info")]
     assert ("POST", "/api/session/ses_x/model") in seen
     assert ("POST", "/api/session/ses_x/agent") in seen
     assert ("POST", "/api/session/ses_x/prompt") in seen
@@ -243,7 +249,7 @@ def test_unsupported_capability_fails_closed() -> None:
     """No usable health path raises clearly and keeps legacy selected."""
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path in ("/global/health", "/api/health"):
+        if request.url.path in ("/global/health", "/api/info"):
             return httpx.Response(404, json={}, request=request)
         raise AssertionError(f"unexpected {request.url.path}")
 
@@ -263,13 +269,13 @@ def test_unsupported_capability_fails_closed() -> None:
 
 
 def test_incomplete_v2_payload_fails_closed() -> None:
-    """A V2 health envelope without a dict payload is rejected, not faked."""
+    """A non-dict V2 info payload is rejected, not faked."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
-        if request.url.path == "/api/health":
-            return httpx.Response(200, json={"data": None}, request=request)
+        if request.url.path == "/api/info":
+            return httpx.Response(200, json=["not-a-server-info"], request=request)
         raise AssertionError(f"unexpected {request.url.path}")
 
     async def run() -> None:
@@ -292,10 +298,10 @@ def test_v2_session_reads_use_verified_routes() -> None:
         seen.append((request.method, request.url.path))
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
-        if request.url.path == "/api/health":
-            return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
+        if request.url.path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
         if request.url.path == "/api/session/ses_1/interrupt":
-            return httpx.Response(200, json={"data": {"interrupted": True}}, request=request)
+            return httpx.Response(200, json={"interrupted": True}, request=request)
         if request.url.path == "/api/session":
             return httpx.Response(200, json={"data": [], "cursor": {}}, request=request)
         if request.url.path == "/api/session/ses_1/diff":
@@ -313,7 +319,7 @@ def test_v2_session_reads_use_verified_routes() -> None:
             await client.close()
 
     asyncio.run(run())
-    assert seen[:2] == [("GET", "/global/health"), ("GET", "/api/health")]
+    assert seen[:2] == [("GET", "/global/health"), ("GET", "/api/info")]
     assert ("POST", "/api/session/ses_1/interrupt") in seen
     assert ("GET", "/api/session") in seen
     assert ("GET", "/api/session/ses_1/diff") in seen
@@ -385,7 +391,7 @@ def test_public_tool_catalog_and_boundaries_unchanged() -> None:
     assert "exec_run" not in worker_names
     assert _unwrap_envelope({"data": {"a": 1}}) == {"a": 1}
     assert _unwrap_envelope([1, 2]) == [1, 2]
-    assert _legacy_to_v2_path("/global/health") == "/api/health"
+    assert _legacy_to_v2_path("/global/health") == "/api/info"
     with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
         _legacy_to_v2_path("/session/ses_1/abort")
     with pytest.raises(OpencodeError, match="V2 lifecycle adapter"):
@@ -422,7 +428,7 @@ def test_first_non_health_call_auto_probes_then_uses_legacy() -> None:
     assert cap["family"] == "legacy"
     assert providers == {"providers": [], "default": {}}
     assert seen == ["/global/health", "/provider"]
-    assert "/api/health" not in seen
+    assert "/api/info" not in seen
 
 
 def test_health_uses_cached_probe_without_duplicate() -> None:
@@ -457,12 +463,8 @@ def test_v2_health_only_auto_probe_routes_verified_calls() -> None:
         seen.append((request.method, request.url.path))
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
-        if request.url.path == "/api/health":
-            return httpx.Response(
-                200,
-                json={"data": {"healthy": True, "version": "2.0.0"}},
-                request=request,
-            )
+        if request.url.path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
         if request.url.path == "/api/session":
             return httpx.Response(
                 200,
@@ -493,9 +495,9 @@ def test_v2_health_only_auto_probe_routes_verified_calls() -> None:
 
     health, family = asyncio.run(run())
     assert family == "v2"
-    assert health == {"healthy": True, "version": "2.0.0"}
+    assert health == V2_INFO
     paths = [path for _, path in seen]
-    assert paths[:2] == ["/global/health", "/api/health"]
+    assert paths[:2] == ["/global/health", "/api/info"]
     assert not any("prompt_async" in p for p in paths)
     assert not any(p.startswith("/session/") for p in paths)
 
@@ -573,3 +575,42 @@ def test_force_refresh_is_only_reprobe_path() -> None:
             await client.close()
 
     assert asyncio.run(run()) == [1, 1, 1, 1, 2, 3]
+
+
+def test_v2_probe_path_is_info_with_direct_envelope() -> None:
+    """Regression: V2 negotiation probes GET /api/info exactly once.
+
+    The probe response is the direct ServerInfo object from the
+    official V2 OpenAPI (no {data} envelope, no healthy field);
+    health() reuses the cache and the undocumented GET /api/health
+    is never requested.
+    """
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/global/health":
+            return httpx.Response(404, json={}, request=request)
+        if request.url.path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
+        raise AssertionError(f"unexpected {request.url.path}")
+
+    async def run() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        client = _mock_client(handler)
+        try:
+            cap = await client.probe_capability()
+            first = await client.health()
+            second = await client.health()
+            return cap, first, second
+        finally:
+            await client.close()
+
+    cap, first, second = asyncio.run(run())
+    assert cap["family"] == "v2"
+    assert cap["version"] == "2.0.0"
+    assert first == V2_INFO
+    assert second == first
+    assert "data" not in first
+    assert "healthy" not in first
+    assert seen == ["/global/health", "/api/info"]
+    assert "/api/health" not in seen

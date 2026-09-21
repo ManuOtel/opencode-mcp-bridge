@@ -23,7 +23,7 @@ from urllib.parse import quote
 import httpx
 
 LEGACY_HEALTH_PATH = "/global/health"
-V2_HEALTH_PATH = "/api/health"
+V2_INFO_PATH = "/api/info"
 PROBE_TIMEOUT_S = 5.0
 
 
@@ -49,13 +49,13 @@ def _legacy_to_v2_path(legacy_path: str) -> str:
     """Map the legacy health path to its V2 equivalent.
 
     Only /global/health has a pure path-to-path V2 equivalent
-    (/api/health). The V2 data plane needs per-method request/response
+    (/api/info). The V2 data plane needs per-method request/response
     adaptation (envelope unwrapping, body reshaping, multi-call model
     selection), so lifecycle mappings live in the OpencodeClient._v2_*
     helpers instead of this path mapper.
     """
     if legacy_path == LEGACY_HEALTH_PATH:
-        return V2_HEALTH_PATH
+        return V2_INFO_PATH
     raise OpencodeError(
         "GET",
         legacy_path,
@@ -371,9 +371,11 @@ class OpencodeClient:
 
         Legacy is preferred: when GET /global/health succeeds the client
         stays on the proven /session + prompt_async contract and never
-        switches merely because /api/health also exists. Only when legacy
-        health is absent does the probe try GET /api/health as a V2
-        compatibility fallback, unwrapping its {data: ...} envelope.
+        switches merely because /api/info also exists. Only when legacy
+        health is absent does the probe try GET /api/info as a V2
+        compatibility fallback. The V2 info response is a direct
+        ServerInfo object ({version, pid, urls, paths}): it carries no
+        {data: ...} envelope and no healthy field.
 
         Args:
             force_refresh: Re-probe even when a cached record exists.
@@ -404,7 +406,7 @@ class OpencodeClient:
             }
             return self._capability
         try:
-            v2_raw = await self._probe_once("GET", V2_HEALTH_PATH, timeout_s)
+            v2_raw = await self._probe_once("GET", V2_INFO_PATH, timeout_s)
         except OpencodeError as v2_error:
             raise OpencodeError(
                 "GET",
@@ -412,9 +414,9 @@ class OpencodeClient:
                 v2_error.status,
                 "opencode capability probe failed: no usable legacy or V2 health path",
             ) from v2_error
-        v2_data = _unwrap_envelope(v2_raw)
-        if not isinstance(v2_data, dict):
-            raise OpencodeError("GET", V2_HEALTH_PATH, 200, "unsupported V2 capability payload")
+        if not isinstance(v2_raw, dict):
+            raise OpencodeError("GET", V2_INFO_PATH, 200, "unsupported V2 capability payload")
+        v2_data = v2_raw
         version = v2_data.get("version")
         self._api_family = "v2"
         self._server_version = version if isinstance(version, str) else None
@@ -582,7 +584,9 @@ class OpencodeClient:
             force_refresh: Re-probe even when a cached payload exists.
 
         Returns:
-            Dict like {healthy: True, version: str}.
+            Cached probe payload: the legacy health dict
+            ({healthy, version}) or the direct V2 ServerInfo dict
+            ({version, pid, urls, paths}, no healthy field).
         """
         if force_refresh:
             await self.probe_capability(force_refresh=True)
@@ -1061,8 +1065,8 @@ class OpencodeClient:
         """Abort a running session.
 
         In V2 mode POST /api/session/{sessionID}/interrupt is used; the
-        {data: {interrupted}} envelope is validated and True is returned
-        on success.
+        documented direct SessionInterruptResponse ({interrupted: bool},
+        no data envelope) is validated and True is returned on success.
 
         Args:
             session_id: Session ID.
@@ -1074,9 +1078,8 @@ class OpencodeClient:
         await self._ensure_capability()
         if self._api_family == "v2":
             quoted = quote(session_id, safe="")
-            raw = await self._request("POST", f"/api/session/{quoted}/interrupt")
-            data = _require_v2_data(raw, "POST", f"/api/session/{quoted}/interrupt")
-            if not isinstance(data, dict) or "interrupted" not in data:
+            data = await self._request("POST", f"/api/session/{quoted}/interrupt")
+            if not isinstance(data, dict) or not isinstance(data.get("interrupted"), bool):
                 raise OpencodeError(
                     "POST",
                     f"/api/session/{quoted}/interrupt",

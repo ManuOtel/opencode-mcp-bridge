@@ -75,6 +75,13 @@ V2_MODELS = [
     },
 ]
 
+V2_INFO = {
+    "version": "2.0.0",
+    "pid": 123,
+    "urls": ["http://127.0.0.1:4096"],
+    "paths": {"tmp": "/tmp"},
+}
+
 V2_DEFAULT_MODEL = V2_MODELS[0]
 
 V2_AGENTS = [
@@ -124,9 +131,11 @@ V2_MESSAGES = [
 ]
 
 # Every V2 path the adapter may request. Anything else is a regression.
+# GET /api/info is the documented capability probe (direct ServerInfo);
+# the undocumented GET /api/health is never requested.
 V2_ALLOWLIST = {
     "/global/health",
-    "/api/health",
+    "/api/info",
     "/api/provider",
     "/api/model",
     "/api/model/default",
@@ -156,12 +165,8 @@ class V2World:
         path = request.url.path
         if path == "/global/health":
             return httpx.Response(404, json={}, request=request)
-        if path == "/api/health":
-            return httpx.Response(
-                200,
-                json={"data": {"healthy": True, "version": "2.0.0"}},
-                request=request,
-            )
+        if path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
         if path == "/api/provider":
             return httpx.Response(
                 200,
@@ -207,7 +212,7 @@ class V2World:
         if path == "/api/session/ses_1/message":
             return httpx.Response(200, json={"data": V2_MESSAGES, "cursor": {}}, request=request)
         if path == "/api/session/ses_1/interrupt":
-            return httpx.Response(200, json={"data": {"interrupted": True}}, request=request)
+            return httpx.Response(200, json={"interrupted": True}, request=request)
         if path == "/api/session/ses_1" and request.method == "GET":
             return httpx.Response(200, json={"data": V2_SESSION}, request=request)
         if path == "/api/session/ses_1" and request.method == "DELETE":
@@ -657,8 +662,8 @@ def test_v2_malformed_envelopes_fail_closed() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
-        if request.url.path == "/api/health":
-            return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
+        if request.url.path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
         if request.url.path == "/api/provider":
             return httpx.Response(200, json={"nodata": []}, request=request)
         if request.url.path in ("/api/model", "/api/model/default"):
@@ -707,8 +712,8 @@ def test_v2_errors_never_echo_secrets_or_prompts() -> None:
         seen.append(request.url.path)
         if request.url.path == "/global/health":
             return httpx.Response(404, json={}, request=request)
-        if request.url.path == "/api/health":
-            return httpx.Response(200, json={"data": {"healthy": True}}, request=request)
+        if request.url.path == "/api/info":
+            return httpx.Response(200, json=dict(V2_INFO), request=request)
         return httpx.Response(500, text="boom", request=request)
 
     async def run() -> str:
@@ -739,3 +744,76 @@ def test_v2_errors_never_echo_secrets_or_prompts() -> None:
     asyncio.run(run())
     assert "/api/session/ses_1/model" in seen
     assert not any("prompt_async" in path for path in seen)
+
+
+def test_v2_capability_probe_uses_info_direct_shape() -> None:
+    """Regression: probe is GET /api/info with a direct ServerInfo body.
+
+    Per the official V2 OpenAPI, GET /api/info returns ServerInfo
+    {version, pid, urls, paths} directly: no {data} envelope and no
+    healthy field. The undocumented GET /api/health must never fire.
+    """
+    world = V2World()
+
+    async def run() -> tuple[dict[str, Any], dict[str, Any]]:
+        client = _mock_client(world)
+        try:
+            cap = await client.probe_capability()
+            health = await client.health()
+            return cap, health
+        finally:
+            await client.close()
+
+    cap, health = asyncio.run(run())
+    assert cap["family"] == "v2"
+    assert cap["version"] == "2.0.0"
+    assert world.paths().count("/api/info") == 1
+    assert "/api/health" not in world.paths()
+    assert health == V2_INFO
+    assert "data" not in health
+    assert "healthy" not in health
+    assert set(health) == {"version", "pid", "urls", "paths"}
+    world.assert_allowlisted()
+
+
+def test_v2_interrupt_accepts_direct_shape_rejects_envelope() -> None:
+    """Regression: interrupt takes the direct {interrupted: bool} shape.
+
+    Per the official V2 OpenAPI, POST /api/session/{id}/interrupt
+    returns SessionInterruptResponse directly. A legacy-style {data}
+    envelope, a missing flag, or a non-bool flag fails closed.
+    """
+    seen: list[tuple[str, str]] = []
+
+    async def run_once(payload: Any) -> bool:
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.method, request.url.path))
+            if request.url.path == "/global/health":
+                return httpx.Response(404, json={}, request=request)
+            if request.url.path == "/api/info":
+                return httpx.Response(200, json=dict(V2_INFO), request=request)
+            if request.url.path == "/api/session/ses_1/interrupt":
+                return httpx.Response(200, json=payload, request=request)
+            raise AssertionError(f"unexpected {request.url.path}")
+
+        client = OpencodeClient("http://opencode", "u", "p")
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://opencode"
+        )
+        try:
+            await client.probe_capability()
+            return await client.abort_session("ses_1", "/tmp/w")
+        finally:
+            await client.close()
+
+    assert asyncio.run(run_once({"interrupted": True})) is True
+    assert asyncio.run(run_once({"interrupted": False})) is True
+    for bad in (
+        {"data": {"interrupted": True}},
+        {"oops": 1},
+        {"interrupted": "yes"},
+    ):
+        with pytest.raises(OpencodeError, match="unsupported V2 interrupt"):
+            asyncio.run(run_once(bad))
+    assert ("POST", "/api/session/ses_1/interrupt") in seen
+    assert not any(path == "/api/health" for _, path in seen)

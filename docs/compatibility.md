@@ -146,13 +146,14 @@ The bridge prefers the legacy contract: when `GET /global/health`
 succeeds, every route trace stays identical to previous releases. Only
 when legacy health is absent does the cached capability probe select
 V2, in which case the client routes through these verified V2
-contracts (reference: https://opencode.ai/v2/docs/api). Proven by
+contracts (reference: https://opencode.ai/v2/docs/api; route and shape
+authority: https://opencode.ai/v2/openapi.json). Proven by
 `tests/test_api_v2.py` plus `tests/test_api_negotiation.py` against a
 mock transport; no live V2 server run is claimed.
 
 | Bridge method | Verified V2 route(s) | Normalization / boundary |
 | --- | --- | --- |
-| `health` | `GET /api/health` | `{data}` envelope unwrapped. |
+| `health` | `GET /api/info` | Direct `ServerInfo` (`{version, pid, urls, paths}`): no `{data}` envelope, no `healthy` field. Returned as-is from the cache. |
 | `list_providers`, `get_providers_raw` | `GET /api/provider` + `GET /api/model` + `GET /api/model/default` (each with `location[directory]` query) | Merged into legacy `{all, connected, default}`. Only id/name/modelIDs/cost/activation read; settings/headers/body never extracted. Provider counts as connected unless `activation` is `disabled`. The resolved directory (explicit arg or configured default) is sent as `location[directory]`; legacy `GET /provider` still sends no query params. |
 | `list_agents` | `GET /api/agent` (with `location[directory]` query) | `{data}` unwrapped; same `{name, mode, description}` shape. The resolved directory (explicit arg or configured default) is sent as `location[directory]` per the V2 OpenAPI deepObject contract. |
 | `create_session` | `POST /api/session` | Body `{title, location: {directory}}`; `{data: Session.Info}` returned. |
@@ -161,15 +162,16 @@ mock transport; no live V2 server run is claimed.
 | `list_messages`, `get_latest_assistant` | `GET /api/session/{id}/message` (`limit` only) | Projected messages map to `{id, role, text, time}`; assistant text comes from `content[]` text items (reasoning/tool items skipped); `has_error` set on `error` or `finish: error`. |
 | `list_sessions` | `GET /api/session` (`directory`, `limit`) | `{data}` unwrapped; `location.directory` fills the simplified `directory`. Cursors not followed. |
 | `get_session` | `GET /api/session/{id}` | `{data: Session.Info}` simplified; takes no directory parameter. |
-| `abort_session` | `POST /api/session/{id}/interrupt` | `{data: {interrupted}}` validated; returns `True` on success. |
+| `abort_session` | `POST /api/session/{id}/interrupt` | Direct `SessionInterruptResponse` (`{interrupted: bool}`, no `{data}` envelope) validated; returns `True` on success. |
 | `delete_session` | `DELETE /api/session/{id}` | `204`; returns `True`. |
 | `get_diff` | `GET /api/session/{id}/diff` (`from`) | `message_id` maps to `from`; `{data}` list returned. No directory parameter exists. |
 | `send_message` (sync) | none | Fails closed: V2 prompt is async-only with no verified sync-reply mapping. Use `prompt_async` plus message polling. |
 
-Fail-closed rule: any V2 response without the documented envelope, or
-any method without a row above, raises `OpencodeError` with a precise
+Fail-closed rule: any V2 response that does not match the documented
+shape in the row above (direct object or `{data}` envelope as listed),
+or any method without a row above, raises `OpencodeError` with a precise
 reason before sending further requests. The adapter never requests
-`/session/status`, `prompt_async`, legacy `/provider` or `/agent`
+the undocumented `/api/health`, `/session/status`, `prompt_async`, legacy `/provider` or `/agent`
 while in V2 mode, and never invents a V2 path. Worker semantics
 (free-first catalog, explicit paid fallback, eight-tool `/worker-mcp`
 surface, no `exec_run` there, auth boundaries) are unchanged; V2 needs
