@@ -153,7 +153,7 @@ mock transport; no live V2 server run is claimed.
 
 | Bridge method | Verified V2 route(s) | Normalization / boundary |
 | --- | --- | --- |
-| `health` | `GET /api/info` | Direct `ServerInfo` (`{version, pid, urls, paths}`): no `{data}` envelope, no `healthy` field. Returned as-is from the cache. |
+| `health` | `GET /api/info` | Direct `ServerInfo` (`{version, pid, urls, paths}`): no `{data}` envelope, no `healthy` field. The probe requires `version` (string), `pid` (integer), `urls` (array), and `paths` (object containing string `tmp`); a `{data}` envelope, an empty dict, missing fields, or wrong types fail closed and never select V2. Returned as-is from the cache. |
 | `list_providers`, `get_providers_raw` | `GET /api/provider` + `GET /api/model` + `GET /api/model/default` (each with `location[directory]` query) | Merged into legacy `{all, connected, default}`. Only id/name/modelIDs/cost/activation read; settings/headers/body never extracted. Provider counts as connected unless `activation` is `disabled`. The resolved directory (explicit arg or configured default) is sent as `location[directory]`; legacy `GET /provider` still sends no query params. |
 | `list_agents` | `GET /api/agent` (with `location[directory]` query) | `{data}` unwrapped; same `{name, mode, description}` shape. The resolved directory (explicit arg or configured default) is sent as `location[directory]` per the V2 OpenAPI deepObject contract. |
 | `create_session` | `POST /api/session` | Body `{title, location: {directory}}`; `{data: Session.Info}` returned. |
@@ -170,7 +170,9 @@ mock transport; no live V2 server run is claimed.
 Fail-closed rule: any V2 response that does not match the documented
 shape in the row above (direct object or `{data}` envelope as listed),
 or any method without a row above, raises `OpencodeError` with a precise
-reason before sending further requests. The adapter never requests
+reason before sending further requests. When neither family offers a
+usable health/info capability, the probe raises `OpencodeError` and
+keeps the legacy family. The adapter never requests
 the undocumented `/api/health`, `/session/status`, `prompt_async`, legacy `/provider` or `/agent`
 while in V2 mode, and never invents a V2 path. Worker semantics
 (free-first catalog, explicit paid fallback, eight-tool `/worker-mcp`

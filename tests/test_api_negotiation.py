@@ -246,7 +246,7 @@ def test_v2_prompt_uses_verified_prompt_route() -> None:
 
 
 def test_unsupported_capability_fails_closed() -> None:
-    """No usable health path raises clearly and keeps legacy selected."""
+    """No usable health/info capability raises clearly and keeps legacy selected."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path in ("/global/health", "/api/info"):
@@ -614,3 +614,50 @@ def test_v2_probe_path_is_info_with_direct_envelope() -> None:
     assert "healthy" not in first
     assert seen == ["/global/health", "/api/info"]
     assert "/api/health" not in seen
+
+
+def test_malformed_v2_info_fails_closed() -> None:
+    """Malformed/missing ServerInfo never selects V2.
+
+    GET /api/info requires the direct ServerInfo object (version str,
+    pid int, urls list, paths dict with tmp). A {data} envelope, an
+    empty dict, missing fields, or wrong types fail closed and keep
+    the legacy family so no V2 data-plane call fires.
+    """
+    bad_payloads: list[Any] = [
+        {},
+        {"data": dict(V2_INFO)},
+        {"version": "2.0.0", "pid": 123},
+        {**V2_INFO, "version": 2},
+        {**V2_INFO, "pid": "123"},
+        {**V2_INFO, "pid": False},
+        {**V2_INFO, "urls": "http://127.0.0.1:4096"},
+        {**V2_INFO, "paths": {}},
+        {**V2_INFO, "paths": {"tmp": None}},
+    ]
+
+    async def run_once(payload: Any) -> list[str]:
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.path)
+            if request.url.path == "/global/health":
+                return httpx.Response(404, json={}, request=request)
+            if request.url.path == "/api/info":
+                return httpx.Response(200, json=payload, request=request)
+            raise AssertionError(f"unexpected {request.url.path}")
+
+        client = _mock_client(handler)
+        try:
+            with pytest.raises(OpencodeError, match="unsupported V2 ServerInfo"):
+                await client.probe_capability()
+            assert client.api_family == "legacy"
+            assert client.capability is None
+            return seen
+        finally:
+            await client.close()
+
+    for bad in bad_payloads:
+        seen = asyncio.run(run_once(bad))
+        assert seen == ["/global/health", "/api/info"]
+        assert "/api/health" not in seen

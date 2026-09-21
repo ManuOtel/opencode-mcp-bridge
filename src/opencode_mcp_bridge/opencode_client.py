@@ -64,6 +64,44 @@ def _legacy_to_v2_path(legacy_path: str) -> str:
     )
 
 
+def _require_v2_info(payload: Any, method: str, path: str) -> dict[str, Any]:
+    """Validate a direct V2 ServerInfo object, failing closed on wrong shape.
+
+    Per the official V2 OpenAPI, GET /api/info returns ServerInfo
+    directly: {version: string, pid: integer, urls: array,
+    paths: object containing tmp}. A legacy-style {data: ...} envelope,
+    an empty dict, missing fields, or wrong types are rejected.
+
+    Args:
+        payload: Decoded JSON response body.
+        method: HTTP method used, for error reporting.
+        path: V2 API path used, for error reporting.
+
+    Returns:
+        The validated ServerInfo dict.
+
+    Raises:
+        OpencodeError: When the payload is not a well-formed ServerInfo.
+    """
+    if not isinstance(payload, dict):
+        raise OpencodeError(method, path, 200, "unsupported V2 ServerInfo payload")
+    if "data" in payload:
+        raise OpencodeError(method, path, 200, "unsupported V2 ServerInfo envelope")
+    version = payload.get("version")
+    pid = payload.get("pid")
+    urls = payload.get("urls")
+    paths = payload.get("paths")
+    if not isinstance(version, str):
+        raise OpencodeError(method, path, 200, "unsupported V2 ServerInfo shape")
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        raise OpencodeError(method, path, 200, "unsupported V2 ServerInfo shape")
+    if not isinstance(urls, list):
+        raise OpencodeError(method, path, 200, "unsupported V2 ServerInfo shape")
+    if not isinstance(paths, dict) or not isinstance(paths.get("tmp"), str):
+        raise OpencodeError(method, path, 200, "unsupported V2 ServerInfo shape")
+    return payload
+
+
 def _require_v2_data(payload: Any, method: str, path: str) -> Any:
     """Unwrap a V2 {data: ...} envelope, failing closed when absent.
 
@@ -385,7 +423,7 @@ class OpencodeClient:
             Dict with family, version, legacy_available, v2_available.
 
         Raises:
-            OpencodeError: When neither family offers a usable health path.
+            OpencodeError: When neither family offers a usable health/info capability.
         """
         if self._capability is not None and not force_refresh:
             return self._capability
@@ -412,11 +450,9 @@ class OpencodeClient:
                 "GET",
                 LEGACY_HEALTH_PATH,
                 v2_error.status,
-                "opencode capability probe failed: no usable legacy or V2 health path",
+                "opencode capability probe failed: no usable legacy or V2 health/info capability",
             ) from v2_error
-        if not isinstance(v2_raw, dict):
-            raise OpencodeError("GET", V2_INFO_PATH, 200, "unsupported V2 capability payload")
-        v2_data = v2_raw
+        v2_data = _require_v2_info(v2_raw, "GET", V2_INFO_PATH)
         version = v2_data.get("version")
         self._api_family = "v2"
         self._server_version = version if isinstance(version, str) else None

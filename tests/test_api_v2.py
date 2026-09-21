@@ -23,6 +23,7 @@ from opencode_mcp_bridge.opencode_client import (
     OpencodeClient,
     OpencodeError,
     _require_v2_data,
+    _require_v2_info,
     _simplify_v2_message,
     extract_v2_text,
 )
@@ -817,3 +818,66 @@ def test_v2_interrupt_accepts_direct_shape_rejects_envelope() -> None:
             asyncio.run(run_once(bad))
     assert ("POST", "/api/session/ses_1/interrupt") in seen
     assert not any(path == "/api/health" for _, path in seen)
+
+
+def test_v2_info_shape_validation_rejects_malformed() -> None:
+    """Regression: GET /api/info must be a full direct ServerInfo object.
+
+    Per the official V2 OpenAPI, ServerInfo requires version (string),
+    pid (integer), urls (array), and paths (object containing tmp).
+    A {data} envelope, an empty dict, missing fields, or wrong types
+    fail closed and never select V2.
+    """
+    good = dict(V2_INFO)
+    assert _require_v2_info(dict(good), "GET", "/api/info") == good
+
+    bad_payloads: list[Any] = [
+        {},
+        {"data": dict(V2_INFO)},
+        {"version": "2.0.0"},
+        {**good, "version": 123},
+        {**good, "pid": "123"},
+        {**good, "pid": True},
+        {**good, "urls": "http://127.0.0.1:4096"},
+        {**good, "paths": {}},
+        {**good, "paths": []},
+        {**good, "paths": {"tmp": 123}},
+        {k: v for k, v in good.items() if k != "version"},
+        {k: v for k, v in good.items() if k != "pid"},
+        {k: v for k, v in good.items() if k != "urls"},
+        {k: v for k, v in good.items() if k != "paths"},
+    ]
+    for bad in bad_payloads:
+        with pytest.raises(OpencodeError, match="unsupported V2 ServerInfo"):
+            _require_v2_info(bad, "GET", "/api/info")
+    with pytest.raises(OpencodeError, match="unsupported V2 ServerInfo"):
+        _require_v2_info(["not-a-server-info"], "GET", "/api/info")
+
+    async def run_once(payload: Any) -> list[str]:
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.path)
+            if request.url.path == "/global/health":
+                return httpx.Response(404, json={}, request=request)
+            if request.url.path == "/api/info":
+                return httpx.Response(200, json=payload, request=request)
+            raise AssertionError(f"unexpected {request.url.path}")
+
+        client = OpencodeClient("http://opencode", "u", "p")
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://opencode"
+        )
+        try:
+            with pytest.raises(OpencodeError, match="unsupported V2 ServerInfo"):
+                await client.probe_capability()
+            assert client.api_family == "legacy"
+            assert client.capability is None
+            return seen
+        finally:
+            await client.close()
+
+    for bad in bad_payloads:
+        seen = asyncio.run(run_once(bad))
+        assert seen == ["/global/health", "/api/info"]
+        assert "/api/health" not in seen
