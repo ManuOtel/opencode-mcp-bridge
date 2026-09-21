@@ -15,6 +15,26 @@ from urllib.parse import quote
 
 import httpx
 
+LEGACY_HEALTH_PATH = "/global/health"
+V2_HEALTH_PATH = "/api/health"
+PROBE_TIMEOUT_S = 5.0
+
+
+def _unwrap_envelope(payload: Any) -> Any:
+    """Unwrap a V2 {data: ...} envelope, passing other payloads through."""
+    if isinstance(payload, dict) and "data" in payload:
+        return payload["data"]
+    return payload
+
+
+def _legacy_to_v2_path(legacy_path: str) -> str:
+    """Map a legacy opencode path to its envelope-based V2 equivalent."""
+    if legacy_path == LEGACY_HEALTH_PATH:
+        return V2_HEALTH_PATH
+    if legacy_path == "/api" or legacy_path.startswith("/api/"):
+        return legacy_path
+    return "/api" + legacy_path
+
 
 class OpencodeError(RuntimeError):
     """Opencode API failure with HTTP status and a short body snippet."""
@@ -101,6 +121,13 @@ class OpencodeClient:
         self.default_directory = default_directory or os.path.expanduser("~")
         self.default_provider_id = default_provider_id
         self.default_model_id = default_model_id
+        # Runtime route negotiation. Default stays on the proven legacy
+        # contract; V2 is a compatibility fallback selected only by
+        # probe_capability(). No credentials, prompts, paths, or provider
+        # secrets are ever logged here.
+        self._api_family: str = "legacy"
+        self._server_version: str | None = None
+        self._capability: dict[str, Any] | None = None
 
     async def close(self) -> None:
         """Close the underlying HTTP connection pool."""
@@ -188,13 +215,129 @@ class OpencodeClient:
             return True
         return response.json()
 
+    @property
+    def api_family(self) -> str:
+        """Selected route family: 'legacy' (preferred) or 'v2' (fallback)."""
+        return self._api_family
+
+    @property
+    def server_version(self) -> str | None:
+        """Server version recorded by the last capability probe, if any."""
+        return self._server_version
+
+    @property
+    def capability(self) -> dict[str, Any] | None:
+        """Cached capability record, or None before the first probe."""
+        return self._capability
+
+    async def _probe_once(self, method: str, path: str, timeout_s: float) -> Any:
+        """Send one bounded probe request and return decoded JSON."""
+        try:
+            response = await self._client.request(method, path, timeout=httpx.Timeout(timeout_s))
+        except Exception as exc:
+            raise OpencodeError(method, path, 0, type(exc).__name__[:100]) from exc
+        if response.status_code >= 400:
+            raise OpencodeError(method, path, response.status_code, response.text[:200])
+        if response.status_code == 204:
+            return True
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise OpencodeError(method, path, response.status_code, "invalid JSON") from exc
+
+    async def probe_capability(
+        self, force_refresh: bool = False, timeout_s: float = PROBE_TIMEOUT_S
+    ) -> dict[str, Any]:
+        """Detect the server route family once and cache the result.
+
+        Legacy is preferred: when GET /global/health succeeds the client
+        stays on the proven /session + prompt_async contract and never
+        switches merely because /api/health also exists. Only when legacy
+        health is absent does the probe try GET /api/health as a V2
+        compatibility fallback, unwrapping its {data: ...} envelope.
+
+        Args:
+            force_refresh: Re-probe even when a cached record exists.
+            timeout_s: Per-request bound for each of at most two probes.
+
+        Returns:
+            Dict with family, version, legacy_available, v2_available.
+
+        Raises:
+            OpencodeError: When neither family offers a usable health path.
+        """
+        if self._capability is not None and not force_refresh:
+            return self._capability
+        try:
+            legacy = await self._probe_once("GET", LEGACY_HEALTH_PATH, timeout_s)
+        except OpencodeError:
+            legacy = None
+        if legacy is not None:
+            version = legacy.get("version") if isinstance(legacy, dict) else None
+            self._api_family = "legacy"
+            self._server_version = version if isinstance(version, str) else None
+            self._capability = {
+                "family": "legacy",
+                "version": self._server_version,
+                "legacy_available": True,
+                "v2_available": False,
+            }
+            return self._capability
+        try:
+            v2_raw = await self._probe_once("GET", V2_HEALTH_PATH, timeout_s)
+        except OpencodeError as v2_error:
+            raise OpencodeError(
+                "GET",
+                LEGACY_HEALTH_PATH,
+                v2_error.status,
+                "opencode capability probe failed: no usable legacy or V2 health path",
+            ) from v2_error
+        v2_data = _unwrap_envelope(v2_raw)
+        if not isinstance(v2_data, dict):
+            raise OpencodeError("GET", V2_HEALTH_PATH, 200, "unsupported V2 capability payload")
+        version = v2_data.get("version")
+        self._api_family = "v2"
+        self._server_version = version if isinstance(version, str) else None
+        self._capability = {
+            "family": "v2",
+            "version": self._server_version,
+            "legacy_available": False,
+            "v2_available": True,
+        }
+        return self._capability
+
+    async def _request_routed(
+        self,
+        method: str,
+        legacy_path: str,
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        """Send one request via the negotiated route family.
+
+        In legacy mode (default) the proven path is used unchanged. In V2
+        mode the documented /api path is used and a {data: ...} envelope
+        is unwrapped. A V2 response that cannot be unwrapped into a usable
+        payload fails closed with OpencodeError instead of faking success.
+        """
+        if self._api_family != "v2":
+            return await self._request(method, legacy_path, params=params, body=body)
+        v2_path = _legacy_to_v2_path(legacy_path)
+        data = await self._request(method, v2_path, params=params, body=body)
+        if data is True:
+            return True
+        unwrapped = _unwrap_envelope(data)
+        if unwrapped is None:
+            raise OpencodeError(method, v2_path, 200, "unsupported V2 envelope payload")
+        return unwrapped
+
     async def health(self) -> dict[str, Any]:
         """Get server health and version.
 
         Returns:
             Dict like {healthy: True, version: str}.
         """
-        return await self._request("GET", "/global/health")
+        return await self._request_routed("GET", "/global/health")
 
     async def list_providers(self) -> dict[str, Any]:
         """List providers with model IDs and connected status, no secrets.
@@ -203,7 +346,7 @@ class OpencodeClient:
             Dict with providers [{providerID, name, modelIDs, connected}]
             and default model mapping.
         """
-        data = await self._request("GET", "/provider")
+        data = await self._request_routed("GET", "/provider")
         connected = set(data.get("connected", []) or [])
         providers = []
         for provider in data.get("all", []) or []:
@@ -228,7 +371,9 @@ class OpencodeClient:
         Returns:
             Agent list with name/mode/description fields when present.
         """
-        data = await self._request("GET", "/agent", params={"directory": self._dir(directory)})
+        data = await self._request_routed(
+            "GET", "/agent", params={"directory": self._dir(directory)}
+        )
         agents = data if isinstance(data, list) else []
         return [
             {
@@ -259,7 +404,7 @@ class OpencodeClient:
         body: dict[str, Any] = {}
         if title:
             body["title"] = title
-        return await self._request(
+        return await self._request_routed(
             "POST", "/session", params={"directory": self._dir(directory)}, body=body
         )
 
@@ -291,7 +436,7 @@ class OpencodeClient:
         """
         body, _, _ = self._message_body(message, provider_id, model_id, agent)
         path = f"/session/{quote(session_id, safe='')}/message"
-        data = await self._request(
+        data = await self._request_routed(
             "POST", path, params={"directory": self._dir(directory)}, body=body
         )
         info = data.get("info", {}) if isinstance(data, dict) else {}
@@ -335,7 +480,7 @@ class OpencodeClient:
         Returns:
             Map of session ID to raw status dict, e.g. {type: idle|busy|retry}.
         """
-        data = await self._request(
+        data = await self._request_routed(
             "GET", "/session/status", params={"directory": self._dir(directory)}
         )
         return data if isinstance(data, dict) else {}
@@ -347,7 +492,7 @@ class OpencodeClient:
             Raw dict with all/connected/default keys. Never exposes secrets:
             /config/providers is never called.
         """
-        data = await self._request("GET", "/provider")
+        data = await self._request_routed("GET", "/provider")
         return data if isinstance(data, dict) else {}
 
     async def get_latest_assistant(
@@ -370,7 +515,7 @@ class OpencodeClient:
             Dict with messageID, text, total_chars, and has_error flag.
         """
         path = f"/session/{quote(session_id, safe='')}/message"
-        data = await self._request(
+        data = await self._request_routed(
             "GET", path, params={"directory": self._dir(directory), "limit": limit}
         )
         items = data if isinstance(data, list) else []
@@ -429,7 +574,9 @@ class OpencodeClient:
         """
         body, _, _ = self._message_body(message, provider_id, model_id, agent)
         path = f"/session/{quote(session_id, safe='')}/prompt_async"
-        await self._request("POST", path, params={"directory": self._dir(directory)}, body=body)
+        await self._request_routed(
+            "POST", path, params={"directory": self._dir(directory)}, body=body
+        )
         return True
 
     async def list_sessions(
@@ -444,7 +591,7 @@ class OpencodeClient:
         Returns:
             Simplified session dicts.
         """
-        data = await self._request(
+        data = await self._request_routed(
             "GET",
             "/session",
             params={"directory": self._dir(directory), "limit": limit},
@@ -463,7 +610,7 @@ class OpencodeClient:
             Simplified session dict.
         """
         path = f"/session/{quote(session_id, safe='')}"
-        data = await self._request("GET", path, params={"directory": self._dir(directory)})
+        data = await self._request_routed("GET", path, params={"directory": self._dir(directory)})
         return self._simplify_session(data if isinstance(data, dict) else {})
 
     async def list_messages(
@@ -480,7 +627,7 @@ class OpencodeClient:
             Simplified {id, role, text, time} dicts.
         """
         path = f"/session/{quote(session_id, safe='')}/message"
-        data = await self._request(
+        data = await self._request_routed(
             "GET", path, params={"directory": self._dir(directory), "limit": limit}
         )
         items = data if isinstance(data, list) else []
@@ -498,7 +645,7 @@ class OpencodeClient:
             True on success.
         """
         path = f"/session/{quote(session_id, safe='')}/abort"
-        await self._request("POST", path, params={"directory": self._dir(directory)})
+        await self._request_routed("POST", path, params={"directory": self._dir(directory)})
         return True
 
     async def delete_session(self, session_id: str, directory: str | None = None) -> bool:
@@ -512,7 +659,7 @@ class OpencodeClient:
             True on success.
         """
         path = f"/session/{quote(session_id, safe='')}"
-        await self._request("DELETE", path, params={"directory": self._dir(directory)})
+        await self._request_routed("DELETE", path, params={"directory": self._dir(directory)})
         return True
 
     async def get_diff(
@@ -535,7 +682,7 @@ class OpencodeClient:
         params: dict[str, Any] = {"directory": self._dir(directory)}
         if message_id:
             params["messageID"] = message_id
-        data = await self._request("GET", path, params=params)
+        data = await self._request_routed("GET", path, params=params)
         return data if isinstance(data, list) else []
 
     @staticmethod
