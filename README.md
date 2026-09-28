@@ -6,7 +6,7 @@
     height="96" />
   <h1>opencode-mcp-bridge</h1>
   <p>A coordinator-facing MCP server for a self-hosted
-  <a href="https://opencode.ai">OpenCode</a> instance (v0.5.1).</p>
+  <a href="https://opencode.ai">OpenCode</a> instance.</p>
   <p><a href="#first-use-60-seconds"><strong>First use in 60
   seconds</strong></a></p>
   <p>Protocol-level compatibility (MCP over Streamable HTTP) - no
@@ -152,11 +152,11 @@ Codex reads the token from the environment at request time. The
 `opencode-worker` plugin adds skills (`delegate-to-opencode`, then
 `verify-opencode-work`, on failure `recover-opencode-task`; code changes
 follow `opencode-git-workflow`). Install from the Git marketplace pinned
-at `v0.5.1`, then register your own transport as above (the bundled
+at `v0.6.0`, then register your own transport as above (the bundled
 placeholder URL is not usable):
 
 ```bash
-codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.5.1
+codex plugin marketplace add ManuOtel/opencode-mcp-bridge --ref v0.6.0
 ```
 
 Details: [docs/client-setup.md](docs/client-setup.md) sections 2 and 6.

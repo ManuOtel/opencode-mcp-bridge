@@ -135,6 +135,12 @@ def test_send_message_uses_configured_model_defaults() -> None:
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
+            if request.url.path == "/global/health":
+                return httpx.Response(
+                    200,
+                    json={"healthy": True, "version": "1.18.30"},
+                    request=request,
+                )
             return httpx.Response(
                 200,
                 json={"info": {"id": "msg_1"}, "parts": [{"type": "text", "text": "ok"}]},
@@ -150,7 +156,13 @@ def test_send_message_uses_configured_model_defaults() -> None:
             await client.close()
 
     asyncio.run(run())
-    assert requests[0].read() == (
+    assert [request.url.path for request in requests] == [
+        "/global/health",
+        "/session/ses_x/message",
+    ]
+    assert requests[0].method == "GET"
+    assert requests[1].method == "POST"
+    assert requests[1].read() == (
         b'{"parts":[{"type":"text","text":"hello"}],'
         b'"model":{"providerID":"default-provider","modelID":"default-model"}}'
     )
@@ -238,6 +250,12 @@ def test_create_session_only_sends_supported_fields() -> None:
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
+            if request.url.path == "/global/health":
+                return httpx.Response(
+                    200,
+                    json={"healthy": True, "version": "1.18.30"},
+                    request=request,
+                )
             return httpx.Response(200, json={"id": "ses_1"}, request=request)
 
         client._client = httpx.AsyncClient(
@@ -249,8 +267,11 @@ def test_create_session_only_sends_supported_fields() -> None:
             await client.close()
 
     asyncio.run(run())
-    assert requests[0].content == b'{"title":"Test session"}'
-    assert dict(requests[0].url.params) == {"directory": "/tmp/project"}
+    assert [request.url.path for request in requests] == ["/global/health", "/session"]
+    assert requests[0].method == "GET"
+    assert requests[1].method == "POST"
+    assert requests[1].content == b'{"title":"Test session"}'
+    assert dict(requests[1].url.params) == {"directory": "/tmp/project"}
 
 
 @pytest.mark.parametrize(
