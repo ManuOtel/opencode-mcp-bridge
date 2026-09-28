@@ -230,12 +230,16 @@ production checkouts.
 Prerequisites: phases 1 and 4; systemd and Docker deploy files;
 existing minimal `/health`.
 
-Release status (v0.5.1 candidate, 2026-09-16): slices 1 (metrics),
-2 (health and readiness split), and 3 (log redaction) ship with
-tests. Slices 4 (watchdog and backups) and 5 (upgrade and rollback
-procedure) stay future work and unverified. Live proof, OAuth
-(phase 3), and multi-user identity/RBAC (phase 4) also stay future
-work and unverified.
+Release status (v0.6.0 published 2026-09-21; v0.5.1 shipped
+2026-09-16): slices 1 (metrics), 2 (health and readiness split),
+and 3 (log redaction) ship with tests. v0.6.0 adds optional
+OpenCode V2 capability negotiation with legacy preference and
+fail-closed validation; live V2 lifecycle plus Agent Substrate and
+Google AX compatibility stay unclaimed and unverified. Slices 4
+(watchdog and backups) and 5 (upgrade and rollback procedure)
+stay future work and unverified. Live proof, OAuth (phase 3), and
+multi-user identity/RBAC (phase 4) also stay future work and
+unverified.
 
 Implementation slices:
 
@@ -247,7 +251,7 @@ Implementation slices:
    `GET /health` stays minimal liveness (open, `{"ok": true}`);
    add authenticated readiness that checks OpenCode reachability and
    registry writability.
-3. Log redaction (shipped in the v0.5.1 candidate): central redactor
+3. Log redaction (shipped in v0.5.1): central redactor
    for tokens, passwords,
    and `Authorization` headers; failing test if a token fixture
    appears in output.
