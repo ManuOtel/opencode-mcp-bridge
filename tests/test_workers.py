@@ -180,6 +180,7 @@ def test_get_latest_assistant_picks_last_and_flags_error() -> None:
         "text": "boom",
         "total_chars": 4,
         "has_error": True,
+        "provider_error": "provider_error",
     }
 
 
@@ -569,6 +570,7 @@ def test_worker_status_missing_session_maps_to_unknown(
         "messageID": None,
         "output_chars": 0,
         "total_chars": 0,
+        "provider_error": None,
     }
     serialized = json.dumps(result)
     assert "backend-missing-snippet-xyz" not in serialized
