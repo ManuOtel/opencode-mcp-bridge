@@ -26,6 +26,133 @@ LEGACY_HEALTH_PATH = "/global/health"
 V2_INFO_PATH = "/api/info"
 PROBE_TIMEOUT_S = 5.0
 
+PROVIDER_ERROR_GENERIC = "provider_error"
+PROVIDER_ERROR_QUOTA_EXHAUSTED = "provider_quota_exhausted"
+PROVIDER_ERROR_ROUTE_UNAVAILABLE = "provider_route_unavailable"
+PROVIDER_ERROR_AUTH = "provider_auth"
+PROVIDER_ERRORS = frozenset(
+    {
+        PROVIDER_ERROR_GENERIC,
+        PROVIDER_ERROR_QUOTA_EXHAUSTED,
+        PROVIDER_ERROR_ROUTE_UNAVAILABLE,
+        PROVIDER_ERROR_AUTH,
+    }
+)
+
+_QUOTA_SIGNALS = frozenset(
+    {
+        "quota_exceeded",
+        "quota_exhausted",
+        "insufficient_quota",
+        "rate_limit_exceeded",
+        "rate_limited",
+        "too_many_requests",
+        "quota",
+        "rate_limit",
+        "429",
+    }
+)
+_ROUTE_SIGNALS = frozenset(
+    {
+        "route_not_found",
+        "route_unavailable",
+        "no_available_route",
+        "model_not_found",
+        "provider_not_found",
+        "model_unavailable",
+        "provider_unavailable",
+    }
+)
+_AUTH_SIGNALS = frozenset(
+    {
+        "auth_error",
+        "unauthorized",
+        "forbidden",
+        "invalid_api_key",
+        "authentication_failed",
+        "invalid_token",
+        "401",
+        "403",
+    }
+)
+_PROVIDER_SIGNAL_KEYS = ("name", "code", "type")
+
+
+def _normalize_signal(value: Any) -> str | None:
+    """Normalize one structured error signal for allowlist matching."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            numeric = str(int(value))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return numeric.strip().lower() or None
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().lower()
+    return cleaned or None
+
+
+def classify_provider_error(error: Any, finish: Any = None) -> str | None:
+    """Map explicit backend error evidence to a sanitized enum.
+
+    Only structured fields (name/code/type plus numeric status) are
+    allowlisted. Free-form message text, output text, prompts, and
+    session status are never inspected, so empty text or a retry
+    status without explicit provider evidence never implies quota.
+    A V2 finish of exactly "error" counts as explicit generic
+    evidence, matching the legacy truthiness rule for info.error.
+    Signals matching more than one distinct class among quota/auth/route
+    are ambiguous and map to generic; repeated signals within a single
+    class keep that class.
+
+    Args:
+        error: Raw error object from the assistant message or None.
+        finish: Raw V2 finish value or None (legacy passes None).
+
+    Returns:
+        One of the PROVIDER_ERROR_* enums when explicit provider
+        evidence exists, else None. Truthy but unallowlisted errors
+        map to PROVIDER_ERROR_GENERIC, never to a specific code.
+    """
+    has_finish_error = finish == "error"
+    if not error:
+        if has_finish_error:
+            return PROVIDER_ERROR_GENERIC
+        return None
+    signals: list[str] = []
+    if isinstance(error, dict):
+        for key in _PROVIDER_SIGNAL_KEYS:
+            normalized = _normalize_signal(error.get(key))
+            if normalized is not None:
+                signals.append(normalized)
+        for key in ("status", "statusCode", "status_code"):
+            normalized = _normalize_signal(error.get(key))
+            if normalized is not None:
+                signals.append(normalized)
+    elif isinstance(error, str) or (
+        isinstance(error, (int, float)) and not isinstance(error, bool)
+    ):
+        normalized = _normalize_signal(error)
+        if normalized is not None:
+            signals.append(normalized)
+    matched = {
+        "quota" if any(signal in _QUOTA_SIGNALS for signal in signals) else None,
+        "auth" if any(signal in _AUTH_SIGNALS for signal in signals) else None,
+        "route" if any(signal in _ROUTE_SIGNALS for signal in signals) else None,
+    }
+    matched.discard(None)
+    if len(matched) > 1:
+        return PROVIDER_ERROR_GENERIC
+    if "quota" in matched:
+        return PROVIDER_ERROR_QUOTA_EXHAUSTED
+    if "auth" in matched:
+        return PROVIDER_ERROR_AUTH
+    if "route" in matched:
+        return PROVIDER_ERROR_ROUTE_UNAVAILABLE
+    return PROVIDER_ERROR_GENERIC
+
 
 class OpencodeError(RuntimeError):
     """Opencode API failure with HTTP status and a short body snippet."""
@@ -872,7 +999,9 @@ class OpencodeClient:
         parameter only; no directory parameter exists) and scans the
         projected messages newest-first for type "assistant". Text comes
         from the message content[] text items; has_error is set when the
-        message carries an error or finished with "error".
+        message carries an error or finished with "error". provider_error
+        carries the sanitized allowlisted enum (or None); raw error
+        messages are never returned for classification.
 
         Args:
             session_id: Session ID.
@@ -881,7 +1010,8 @@ class OpencodeClient:
                 total_chars always reflects the full untruncated text.
 
         Returns:
-            Dict with messageID, text, total_chars, and has_error flag.
+            Dict with messageID, text, total_chars, has_error flag,
+            and provider_error enum (or None).
         """
         quoted = quote(session_id, safe="")
         raw = await self._request(
@@ -898,13 +1028,27 @@ class OpencodeClient:
             else:
                 text = full_text
             has_error = bool(item.get("error")) or item.get("finish") == "error"
+            provider_error = (
+                classify_provider_error(item.get("error"), item.get("finish"))
+                if has_error
+                else None
+            )
+            if has_error and provider_error is None:
+                provider_error = PROVIDER_ERROR_GENERIC
             return {
                 "messageID": item.get("id"),
                 "text": text,
                 "total_chars": len(full_text),
                 "has_error": has_error,
+                "provider_error": provider_error,
             }
-        return {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
+        return {
+            "messageID": None,
+            "text": "",
+            "total_chars": 0,
+            "has_error": False,
+            "provider_error": None,
+        }
 
     async def get_latest_assistant(
         self,
@@ -923,7 +1067,8 @@ class OpencodeClient:
                 total_chars always reflects the full untruncated text.
 
         Returns:
-            Dict with messageID, text, total_chars, and has_error flag.
+            Dict with messageID, text, total_chars, has_error flag,
+            and provider_error enum (or None, sanitized, never raw).
         """
         await self._ensure_capability()
         if self._api_family == "v2":
@@ -952,13 +1097,25 @@ class OpencodeClient:
                 text = full_text[:max_chars]
             else:
                 text = full_text
+            raw_error = info.get("error")
+            has_error = bool(raw_error)
+            provider_error = classify_provider_error(raw_error) if has_error else None
+            if has_error and provider_error is None:
+                provider_error = PROVIDER_ERROR_GENERIC
             return {
                 "messageID": info.get("id"),
                 "text": text,
                 "total_chars": len(full_text),
-                "has_error": bool(info.get("error")),
+                "has_error": has_error,
+                "provider_error": provider_error,
             }
-        return {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
+        return {
+            "messageID": None,
+            "text": "",
+            "total_chars": 0,
+            "has_error": False,
+            "provider_error": None,
+        }
 
     async def prompt_async(
         self,

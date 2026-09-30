@@ -50,7 +50,12 @@ from opencode_mcp_bridge.config import (
     load_settings,
 )
 from opencode_mcp_bridge.config import _is_within_root as _within_root
-from opencode_mcp_bridge.opencode_client import OpencodeClient, OpencodeError
+from opencode_mcp_bridge.opencode_client import (
+    PROVIDER_ERROR_GENERIC,
+    PROVIDER_ERRORS,
+    OpencodeClient,
+    OpencodeError,
+)
 
 WORKER_INSTRUCTIONS = (
     "Worker-first bridge to self-hosted opencode. "
@@ -580,6 +585,16 @@ WORKER_STATUS_OUTPUT_SCHEMA: dict[str, Any] = {
         "stale": {"type": "boolean"},
         "stale_reason": {"type": ["string", "null"]},
         "recovery_hint": {"type": ["string", "null"]},
+        "provider_error": {
+            "type": ["string", "null"],
+            "enum": [
+                "provider_auth",
+                "provider_error",
+                "provider_quota_exhausted",
+                "provider_route_unavailable",
+                None,
+            ],
+        },
         "timed_out": {"type": "boolean"},
         "retryable": {"type": "boolean"},
         "next_action": {"type": "string"},
@@ -608,6 +623,16 @@ WORKER_WAIT_OUTPUT_SCHEMA: dict[str, Any] = {
         "stale": {"type": "boolean"},
         "stale_reason": {"type": ["string", "null"]},
         "recovery_hint": {"type": ["string", "null"]},
+        "provider_error": {
+            "type": ["string", "null"],
+            "enum": [
+                "provider_auth",
+                "provider_error",
+                "provider_quota_exhausted",
+                "provider_route_unavailable",
+                None,
+            ],
+        },
         "timed_out": {"type": "boolean"},
         "changed": {"type": "boolean"},
         "elapsed_s": {"type": "number"},
@@ -639,6 +664,16 @@ WORKER_VERIFY_OUTPUT_SCHEMA: dict[str, Any] = {
         "stale": {"type": "boolean"},
         "stale_reason": {"type": ["string", "null"]},
         "recovery_hint": {"type": ["string", "null"]},
+        "provider_error": {
+            "type": ["string", "null"],
+            "enum": [
+                "provider_auth",
+                "provider_error",
+                "provider_quota_exhausted",
+                "provider_route_unavailable",
+                None,
+            ],
+        },
         "verification": {"type": "object"},
         "timed_out": {"type": "boolean"},
         "retryable": {"type": "boolean"},
@@ -811,20 +846,47 @@ def _retryable_for_state(state: str, timed_out: bool, stale: bool = False) -> bo
     return bool(timed_out)
 
 
-def _error_code_for_snapshot(state: str, status: Any, message_id: Any) -> str | None:
+def _sanitize_provider_error(value: Any, has_error: bool = False) -> str | None:
+    """Validate a provider error enum, falling back safely.
+
+    Only allowlisted PROVIDER_ERRORS values pass through. A truthy
+    non-allowlisted value (for example from a legacy fake without
+    classification) maps to the generic code when has_error is set.
+    No raw text, prompts, or tokens ever pass through.
+
+    Args:
+        value: Candidate enum value or None.
+        has_error: True when the assistant message flagged an error.
+
+    Returns:
+        Allowlisted enum string or None.
+    """
+    if isinstance(value, str) and value in PROVIDER_ERRORS:
+        return value
+    if has_error:
+        return PROVIDER_ERROR_GENERIC
+    return None
+
+
+def _error_code_for_snapshot(
+    state: str, status: Any, message_id: Any, provider_error: Any = None
+) -> str | None:
     """Return a stable error code for snapshots that need one.
 
-    Only genuinely missing tasks get a code today: unknown state with no
-    raw status and no assistant message means the session is absent from
-    OpenCode. All other states return None (no error).
+    Missing tasks keep task_not_found; approval terminals keep their
+    codes; provider errors in error state map to their sanitized
+    allowlisted enum (generic fallback). Status mapping is unchanged:
+    only genuinely missing tasks get task_not_found, and empty output
+    or retry without explicit provider evidence never implies quota.
 
     Args:
         state: Mapped worker state.
         status: Raw status value (may be None).
         message_id: Assistant message ID or None.
+        provider_error: Sanitized provider enum or None.
 
     Returns:
-        "task_not_found" for absent tasks, else None.
+        task_not_found, approval codes, provider enums, or None.
     """
     if state == "unknown" and status is None and message_id is None:
         return "task_not_found"
@@ -832,11 +894,20 @@ def _error_code_for_snapshot(state: str, status: Any, message_id: Any) -> str | 
         return "approval_rejected"
     if state == APPROVAL_STATE_EXPIRED:
         return "approval_expired"
+    if state == "error":
+        sanitized = _sanitize_provider_error(provider_error, has_error=True)
+        if sanitized is not None:
+            return sanitized
+        return PROVIDER_ERROR_GENERIC
     return None
 
 
 def _worker_evidence(
-    status: Any, message_id: Any, output_chars: int, total_chars: int
+    status: Any,
+    message_id: Any,
+    output_chars: int,
+    total_chars: int,
+    provider_error: Any = None,
 ) -> dict[str, Any]:
     """Build concise bounded evidence for a worker snapshot.
 
@@ -845,16 +916,20 @@ def _worker_evidence(
         message_id: Assistant message ID or None.
         output_chars: Bounded output length.
         total_chars: Full output length.
+        provider_error: Sanitized provider enum or None.
 
     Returns:
-        Small dict with no prompt text, paths, or secrets.
+        Small dict with enum plus allowed numeric metadata only;
+        no prompt text, paths, secrets, snippets, or raw messages.
     """
     raw = status if isinstance(status, str) else (str(status) if status is not None else None)
+    sanitized = _sanitize_provider_error(provider_error, has_error=False)
     return {
         "status": _bound_text(raw, 64) if raw is not None else None,
         "messageID": message_id,
         "output_chars": int(output_chars or 0),
         "total_chars": int(total_chars or 0),
+        "provider_error": sanitized,
     }
 
 
@@ -2894,6 +2969,7 @@ def _approval_pending_view(
         "approval_state": state_now,
         "risky_action": record.get("risky_action"),
         "expires_at": record.get("expires_at"),
+        "provider_error": None,
     }
 
 
@@ -2936,28 +3012,54 @@ async def _snapshot_worker(
     total_chars = 0
     truncated_chars = 0
     truncated = False
+    provider_error: str | None = None
     if include_output:
         try:
             latest = await client.get_latest_assistant(taskID, effective_query, max_chars=cap + 1)
         except OpencodeError as exc:
             if raw is None and exc.status in (404, 500):
-                latest = {"messageID": None, "text": "", "total_chars": 0, "has_error": False}
+                latest = {
+                    "messageID": None,
+                    "text": "",
+                    "total_chars": 0,
+                    "has_error": False,
+                    "provider_error": None,
+                }
             else:
                 raise
         message_id = latest.get("messageID")
-        if latest.get("has_error"):
+        has_error = bool(latest.get("has_error"))
+        if has_error:
             state = "error"
+            provider_error = _sanitize_provider_error(latest.get("provider_error"), True)
+            # Sanitize: never return raw provider text in snapshot
+            # outputs; only the allowlisted enum plus numeric metadata.
+            output = ""
+            output_chars = 0
+            total_chars = 0
+            truncated_chars = 0
+            truncated = False
         elif raw is None and message_id is not None:
             state = "idle"
-        total_chars = int(latest.get("total_chars", 0) or 0)
-        text = latest.get("text", "") or ""
-        if total_chars > cap:
-            output = text[:cap]
-            truncated = True
-            truncated_chars = total_chars - cap
+            total_chars = int(latest.get("total_chars", 0) or 0)
+            text = latest.get("text", "") or ""
+            if total_chars > cap:
+                output = text[:cap]
+                truncated = True
+                truncated_chars = total_chars - cap
+            else:
+                output = text
+            output_chars = len(output) if output is not None else 0
         else:
-            output = text
-        output_chars = len(output) if output is not None else 0
+            total_chars = int(latest.get("total_chars", 0) or 0)
+            text = latest.get("text", "") or ""
+            if total_chars > cap:
+                output = text[:cap]
+                truncated = True
+                truncated_chars = total_chars - cap
+            else:
+                output = text
+            output_chars = len(output) if output is not None else 0
     has_output = bool(message_id) or total_chars > 0
     stale, stale_reason = _classify_task_stale(stale_record, state, has_output, include_output)
     if stale:
@@ -2978,6 +3080,7 @@ async def _snapshot_worker(
         "stale": stale,
         "stale_reason": stale_reason,
         "recovery_hint": recovery_hint,
+        "provider_error": provider_error,
     }
 
 
@@ -3055,14 +3158,18 @@ async def worker_status(
         if isinstance(stale_record, dict) and _is_approval_record(stale_record):
             pending = _approval_pending_view(taskID, stale_record, effective_dir)
             if pending is not None:
-                error_code = _error_code_for_snapshot(pending["state"], None, pending["messageID"])
+                error_code = _error_code_for_snapshot(
+                    pending["state"], None, pending["messageID"], None
+                )
                 _obs_result = {
                     **pending,
                     "timed_out": False,
                     "retryable": _retryable_for_state(pending["state"], False, False),
                     "next_action": _next_action_for_state(pending["state"], False),
                     "error_code": error_code,
-                    "evidence": _worker_evidence(pending["status"], pending["messageID"], 0, 0),
+                    "evidence": _worker_evidence(
+                        pending["status"], pending["messageID"], 0, 0, None
+                    ),
                 }
                 observability.emit(
                     event=observability.EVENT_WORKER,
@@ -3097,13 +3204,17 @@ async def worker_status(
                     "retryable": _retryable_for_state(live["state"], False, live["stale"]),
                     "next_action": _next_action_for_state(live["state"], False),
                     "error_code": _error_code_for_snapshot(
-                        live["state"], live["status"], live["messageID"]
+                        live["state"],
+                        live["status"],
+                        live["messageID"],
+                        live.get("provider_error"),
                     ),
                     "evidence": _worker_evidence(
                         live["status"],
                         live["messageID"],
                         live["output_chars"],
                         live["total_chars"],
+                        live.get("provider_error"),
                     ),
                 }
                 observability.emit(
@@ -3117,7 +3228,9 @@ async def worker_status(
         base = await _snapshot_worker(
             taskID, effective_query, effective_dir, stale_record, include_output, cap
         )
-        error_code = _error_code_for_snapshot(base["state"], base["status"], base["messageID"])
+        error_code = _error_code_for_snapshot(
+            base["state"], base["status"], base["messageID"], base.get("provider_error")
+        )
         _obs_result = {
             **base,
             "timed_out": False,
@@ -3125,7 +3238,11 @@ async def worker_status(
             "next_action": _next_action_for_state(base["state"], False),
             "error_code": error_code,
             "evidence": _worker_evidence(
-                base["status"], base["messageID"], base["output_chars"], base["total_chars"]
+                base["status"],
+                base["messageID"],
+                base["output_chars"],
+                base["total_chars"],
+                base.get("provider_error"),
             ),
             "approval_state": None,
             "risky_action": None,
@@ -3230,7 +3347,9 @@ async def worker_wait(
         if isinstance(stale_record, dict) and _is_approval_record(stale_record):
             pending = _approval_pending_view(taskID, stale_record, effective_dir)
             if pending is not None:
-                first_error = _error_code_for_snapshot(pending["state"], None, pending["messageID"])
+                first_error = _error_code_for_snapshot(
+                    pending["state"], None, pending["messageID"], None
+                )
                 return {
                     **pending,
                     "timed_out": False,
@@ -3240,7 +3359,7 @@ async def worker_wait(
                     "retryable": _retryable_for_state(pending["state"], False, False),
                     "next_action": _next_action_for_state(pending["state"], False),
                     "error_code": first_error,
-                    "evidence": _worker_evidence(pending["status"], None, 0, 0),
+                    "evidence": _worker_evidence(pending["status"], None, 0, 0, None),
                 }
             resume_session = stale_record.get("resume_sessionID")
             if (
@@ -3260,7 +3379,10 @@ async def worker_wait(
                 live_message = live_first["messageID"]
                 live_total = live_first["total_chars"]
                 live_error = _error_code_for_snapshot(
-                    live_state, live_first["status"], live_message
+                    live_state,
+                    live_first["status"],
+                    live_message,
+                    live_first.get("provider_error"),
                 )
                 if live_state != "running" or live_error is not None or live_first.get("stale"):
                     merged: dict[str, Any] = {
@@ -3285,6 +3407,7 @@ async def worker_wait(
                             live_message,
                             live_first["output_chars"],
                             live_total,
+                            live_first.get("provider_error"),
                         ),
                     }
                 deadline = start + bounded_timeout
@@ -3326,13 +3449,17 @@ async def worker_wait(
                             ),
                             "next_action": _next_action_for_state(current["state"], False),
                             "error_code": _error_code_for_snapshot(
-                                current["state"], current["status"], current["messageID"]
+                                current["state"],
+                                current["status"],
+                                current["messageID"],
+                                current.get("provider_error"),
                             ),
                             "evidence": _worker_evidence(
                                 current["status"],
                                 current["messageID"],
                                 current["output_chars"],
                                 current["total_chars"],
+                                current.get("provider_error"),
                             ),
                         }
                     latest = current
@@ -3353,13 +3480,17 @@ async def worker_wait(
                     "retryable": _retryable_for_state(latest["state"], True, latest["stale"]),
                     "next_action": _next_action_for_state(latest["state"], True),
                     "error_code": _error_code_for_snapshot(
-                        latest["state"], latest["status"], latest["messageID"]
+                        latest["state"],
+                        latest["status"],
+                        latest["messageID"],
+                        latest.get("provider_error"),
                     ),
                     "evidence": _worker_evidence(
                         latest["status"],
                         latest["messageID"],
                         latest["output_chars"],
                         latest["total_chars"],
+                        latest.get("provider_error"),
                     ),
                 }
         first = await _snapshot_worker(
@@ -3368,7 +3499,9 @@ async def worker_wait(
         first_state = first["state"]
         first_message = first["messageID"]
         first_total = first["total_chars"]
-        first_error = _error_code_for_snapshot(first_state, first["status"], first_message)
+        first_error = _error_code_for_snapshot(
+            first_state, first["status"], first_message, first.get("provider_error")
+        )
         if first_state != "running" or first_error is not None or first.get("stale"):
             return {
                 **first,
@@ -3380,7 +3513,11 @@ async def worker_wait(
                 "next_action": _next_action_for_state(first_state, False),
                 "error_code": first_error,
                 "evidence": _worker_evidence(
-                    first["status"], first_message, first["output_chars"], first_total
+                    first["status"],
+                    first_message,
+                    first["output_chars"],
+                    first_total,
+                    first.get("provider_error"),
                 ),
                 "approval_state": None,
                 "risky_action": None,
@@ -3410,13 +3547,17 @@ async def worker_wait(
                     "retryable": _retryable_for_state(current["state"], False, current["stale"]),
                     "next_action": _next_action_for_state(current["state"], False),
                     "error_code": _error_code_for_snapshot(
-                        current["state"], current["status"], current["messageID"]
+                        current["state"],
+                        current["status"],
+                        current["messageID"],
+                        current.get("provider_error"),
                     ),
                     "evidence": _worker_evidence(
                         current["status"],
                         current["messageID"],
                         current["output_chars"],
                         current["total_chars"],
+                        current.get("provider_error"),
                     ),
                     "approval_state": None,
                     "risky_action": None,
@@ -3432,13 +3573,17 @@ async def worker_wait(
             "retryable": _retryable_for_state(latest["state"], True, latest["stale"]),
             "next_action": _next_action_for_state(latest["state"], True),
             "error_code": _error_code_for_snapshot(
-                latest["state"], latest["status"], latest["messageID"]
+                latest["state"],
+                latest["status"],
+                latest["messageID"],
+                latest.get("provider_error"),
             ),
             "evidence": _worker_evidence(
                 latest["status"],
                 latest["messageID"],
                 latest["output_chars"],
                 latest["total_chars"],
+                latest.get("provider_error"),
             ),
             "approval_state": None,
             "risky_action": None,
