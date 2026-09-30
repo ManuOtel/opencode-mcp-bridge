@@ -110,6 +110,32 @@ def test_classifier_route_and_auth_distinct() -> None:
     assert classify_provider_error({"status": 403}) == PROVIDER_ERROR_AUTH
 
 
+def test_classifier_conflicting_classes_are_generic() -> None:
+    """Distinct quota/auth/route signals collide to generic, never first match."""
+    assert (
+        classify_provider_error({"code": "quota_exceeded", "name": "unauthorized"})
+        == PROVIDER_ERROR_GENERIC
+    )
+    assert (
+        classify_provider_error({"code": "quota_exceeded", "type": "model_not_found"})
+        == PROVIDER_ERROR_GENERIC
+    )
+    assert (
+        classify_provider_error({"code": "unauthorized", "type": "model_not_found"})
+        == PROVIDER_ERROR_GENERIC
+    )
+    # Repeated signals within one class keep that single class.
+    assert (
+        classify_provider_error({"code": "quota_exceeded", "type": "429"})
+        == PROVIDER_ERROR_QUOTA_EXHAUSTED
+    )
+    assert classify_provider_error({"code": "unauthorized", "type": "401"}) == PROVIDER_ERROR_AUTH
+    assert (
+        classify_provider_error({"code": "model_not_found", "type": "route_unavailable"})
+        == PROVIDER_ERROR_ROUTE_UNAVAILABLE
+    )
+
+
 def _legacy_client(payload: list[dict[str, Any]]) -> OpencodeClient:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/global/health":

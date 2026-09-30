@@ -103,6 +103,9 @@ def classify_provider_error(error: Any, finish: Any = None) -> str | None:
     status without explicit provider evidence never implies quota.
     A V2 finish of exactly "error" counts as explicit generic
     evidence, matching the legacy truthiness rule for info.error.
+    Signals matching more than one distinct class among quota/auth/route
+    are ambiguous and map to generic; repeated signals within a single
+    class keep that class.
 
     Args:
         error: Raw error object from the assistant message or None.
@@ -134,15 +137,20 @@ def classify_provider_error(error: Any, finish: Any = None) -> str | None:
         normalized = _normalize_signal(error)
         if normalized is not None:
             signals.append(normalized)
-    for signal in signals:
-        if signal in _QUOTA_SIGNALS:
-            return PROVIDER_ERROR_QUOTA_EXHAUSTED
-    for signal in signals:
-        if signal in _AUTH_SIGNALS:
-            return PROVIDER_ERROR_AUTH
-    for signal in signals:
-        if signal in _ROUTE_SIGNALS:
-            return PROVIDER_ERROR_ROUTE_UNAVAILABLE
+    matched = {
+        "quota" if any(signal in _QUOTA_SIGNALS for signal in signals) else None,
+        "auth" if any(signal in _AUTH_SIGNALS for signal in signals) else None,
+        "route" if any(signal in _ROUTE_SIGNALS for signal in signals) else None,
+    }
+    matched.discard(None)
+    if len(matched) > 1:
+        return PROVIDER_ERROR_GENERIC
+    if "quota" in matched:
+        return PROVIDER_ERROR_QUOTA_EXHAUSTED
+    if "auth" in matched:
+        return PROVIDER_ERROR_AUTH
+    if "route" in matched:
+        return PROVIDER_ERROR_ROUTE_UNAVAILABLE
     return PROVIDER_ERROR_GENERIC
 
 
