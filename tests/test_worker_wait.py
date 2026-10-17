@@ -264,6 +264,7 @@ def test_status_backward_compatible_plus_contract(monkeypatch: pytest.MonkeyPatc
         "messageID": "m9",
         "output_chars": 6,
         "total_chars": 6,
+        "provider_error": None,
     }
 
 

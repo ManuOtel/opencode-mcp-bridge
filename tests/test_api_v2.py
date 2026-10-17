@@ -532,6 +532,7 @@ def test_v2_latest_assistant_reports_error_and_caps() -> None:
         "text": "partial",
         "total_chars": 7,
         "has_error": True,
+        "provider_error": "provider_error",
     }
     assert capped["text"] == "par"
     assert capped["total_chars"] == 7
